@@ -28,6 +28,7 @@ import io.trino.spi.statistics.Estimate;
 import io.trino.spi.statistics.TableStatistics;
 import io.trino.spi.type.FixedWidthType;
 import io.trino.spi.type.TypeManager;
+import jakarta.annotation.Nullable;
 import org.apache.iceberg.BlobMetadata;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.Schema;
@@ -40,8 +41,6 @@ import org.apache.iceberg.puffin.StandardBlobTypes;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 
-import javax.annotation.Nullable;
-
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.HashSet;
@@ -52,8 +51,6 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static com.google.common.base.Verify.verifyNotNull;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
@@ -61,6 +58,7 @@ import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Streams.stream;
 import static io.trino.plugin.iceberg.ExpressionConverter.toIcebergExpression;
 import static io.trino.plugin.iceberg.IcebergErrorCode.ICEBERG_INVALID_METADATA;
+import static io.trino.plugin.iceberg.IcebergMetadataColumn.isMetadataColumnId;
 import static io.trino.plugin.iceberg.IcebergSessionProperties.isExtendedStatisticsEnabled;
 import static io.trino.plugin.iceberg.IcebergUtil.getColumns;
 import static io.trino.spi.type.VarbinaryType.VARBINARY;
@@ -76,19 +74,6 @@ public final class TableStatisticsReader
     private TableStatisticsReader() {}
 
     private static final Logger log = Logger.get(TableStatisticsReader.class);
-
-    // TODO (https://github.com/trinodb/trino/issues/15397): remove support for Trino-specific statistics properties
-    @Deprecated
-    public static final String TRINO_STATS_PREFIX = "trino.stats.ndv.";
-    // TODO (https://github.com/trinodb/trino/issues/15397): remove support for Trino-specific statistics properties
-    @Deprecated
-    public static final String TRINO_STATS_NDV_FORMAT = TRINO_STATS_PREFIX + "%d.ndv";
-    // TODO (https://github.com/trinodb/trino/issues/15397): remove support for Trino-specific statistics properties
-    @Deprecated
-    public static final Pattern TRINO_STATS_COLUMN_ID_PATTERN = Pattern.compile(Pattern.quote(TRINO_STATS_PREFIX) + "(?<columnId>\\d+)\\..*");
-    // TODO (https://github.com/trinodb/trino/issues/15397): remove support for Trino-specific statistics properties
-    @Deprecated
-    public static final Pattern TRINO_STATS_NDV_PATTERN = Pattern.compile(Pattern.quote(TRINO_STATS_PREFIX) + "(?<columnId>\\d+)\\.ndv");
 
     public static final String APACHE_DATASKETCHES_THETA_V1_NDV_PROPERTY = "ndv";
 
@@ -141,7 +126,8 @@ public final class TableStatisticsReader
                 .collect(toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
 
         TableScan tableScan = icebergTable.newScan()
-                .filter(toIcebergExpression(effectivePredicate))
+                // Table enforced constraint may include eg $path column predicate which is not handled by Iceberg library TODO apply $path and $file_modified_time filters here
+                .filter(toIcebergExpression(effectivePredicate.filter((column, domain) -> !isMetadataColumnId(column.getId()))))
                 .useSnapshot(snapshotId)
                 .includeColumnStats();
 
@@ -254,24 +240,6 @@ public final class TableStatisticsReader
                 }
             }
         });
-
-        // TODO (https://github.com/trinodb/trino/issues/15397): remove support for Trino-specific statistics properties
-        Iterator<Entry<String, String>> properties = icebergTable.properties().entrySet().iterator();
-        while (!remainingColumnIds.isEmpty() && properties.hasNext()) {
-            Entry<String, String> entry = properties.next();
-            String key = entry.getKey();
-            String value = entry.getValue();
-            if (key.startsWith(TRINO_STATS_PREFIX)) {
-                Matcher matcher = TRINO_STATS_NDV_PATTERN.matcher(key);
-                if (matcher.matches()) {
-                    int columnId = Integer.parseInt(matcher.group("columnId"));
-                    if (remainingColumnIds.remove(columnId)) {
-                        long ndv = parseLong(value);
-                        ndvByColumnId.put(columnId, ndv);
-                    }
-                }
-            }
-        }
 
         return ndvByColumnId.buildOrThrow();
     }

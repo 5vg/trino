@@ -31,7 +31,7 @@ import io.trino.spi.predicate.NullableValue;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.sql.planner.assertions.BasePlanTest;
 import io.trino.testing.LocalQueryRunner;
-import org.testng.annotations.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
@@ -87,7 +87,8 @@ public class TestRemoveEmptyUnionBranches
                                     .collect(toImmutableList()),
                             Optional.empty(),
                             Optional.empty(),
-                            true));
+                            true,
+                            ImmutableList.of()));
 
     @Override
     protected LocalQueryRunner createLocalQueryRunner()
@@ -147,6 +148,7 @@ public class TestRemoveEmptyUnionBranches
                                         new MockConnectorTableHandle(handle.getTableName(), TupleDomain.none(), Optional.empty()),
                                         constraint.getSummary()
                                                 .filter((ch, domain) -> !shouldPushdown.test(ch)),
+                                        constraint.getExpression(),
                                         false));
                     }
 
@@ -159,6 +161,7 @@ public class TestRemoveEmptyUnionBranches
                                     new MockConnectorTableHandle(handle.getTableName(), newDomain, Optional.empty()),
                                     constraint.getSummary()
                                             .filter((columnHandle, domain) -> !shouldPushdown.test(columnHandle)),
+                                    constraint.getExpression(),
                                     false));
                 }
             }

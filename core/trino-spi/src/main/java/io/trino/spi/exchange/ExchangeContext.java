@@ -16,9 +16,11 @@ package io.trino.spi.exchange;
 import io.trino.spi.Experimental;
 import io.trino.spi.QueryId;
 
+import java.util.StringJoiner;
+
 import static java.util.Objects.requireNonNull;
 
-@Experimental(eta = "2023-01-01")
+@Experimental(eta = "2023-09-01")
 public class ExchangeContext
 {
     private final QueryId queryId;
@@ -38,5 +40,14 @@ public class ExchangeContext
     public ExchangeId getExchangeId()
     {
         return exchangeId;
+    }
+
+    @Override
+    public String toString()
+    {
+        return new StringJoiner(", ", ExchangeContext.class.getSimpleName() + "[", "]")
+                .add("queryId=" + queryId)
+                .add("exchangeId=" + exchangeId)
+                .toString();
     }
 }

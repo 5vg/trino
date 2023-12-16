@@ -15,7 +15,6 @@ package io.trino.plugin.hudi;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import io.airlift.log.Logger;
 import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.plugin.base.classloader.ClassLoaderSafeSystemTable;
@@ -56,10 +55,12 @@ import static io.trino.plugin.hive.HiveTimestampPrecision.NANOSECONDS;
 import static io.trino.plugin.hive.util.HiveUtil.columnMetadataGetter;
 import static io.trino.plugin.hive.util.HiveUtil.hiveColumnHandles;
 import static io.trino.plugin.hive.util.HiveUtil.isHiveSystemSchema;
+import static io.trino.plugin.hive.util.HiveUtil.isHudiTable;
+import static io.trino.plugin.hudi.HudiErrorCode.HUDI_BAD_DATA;
 import static io.trino.plugin.hudi.HudiSessionProperties.getColumnsToHide;
 import static io.trino.plugin.hudi.HudiTableProperties.LOCATION_PROPERTY;
 import static io.trino.plugin.hudi.HudiTableProperties.PARTITIONED_BY_PROPERTY;
-import static io.trino.plugin.hudi.HudiUtil.isHudiTable;
+import static io.trino.plugin.hudi.HudiUtil.hudiMetadataExists;
 import static io.trino.plugin.hudi.model.HudiTableType.COPY_ON_WRITE;
 import static io.trino.spi.StandardErrorCode.UNSUPPORTED_TABLE_TYPE;
 import static io.trino.spi.connector.SchemaTableName.schemaTableName;
@@ -71,8 +72,6 @@ import static java.util.function.Function.identity;
 public class HudiMetadata
         implements ConnectorMetadata
 {
-    public static final Logger log = Logger.get(HudiMetadata.class);
-
     private final HiveMetastore metastore;
     private final TrinoFileSystemFactory fileSystemFactory;
     private final TypeManager typeManager;
@@ -102,9 +101,14 @@ public class HudiMetadata
         if (table.isEmpty()) {
             return null;
         }
-        if (!isHudiTable(fileSystemFactory.create(session), Location.of(table.get().getStorage().getLocation()))) {
+        if (!isHudiTable(table.get())) {
             throw new TrinoException(UNSUPPORTED_TABLE_TYPE, format("Not a Hudi table: %s", tableName));
         }
+        Location location = Location.of(table.get().getStorage().getLocation());
+        if (!hudiMetadataExists(fileSystemFactory.create(session), location)) {
+            throw new TrinoException(HUDI_BAD_DATA, "Location of table %s does not contain Hudi table metadata: %s".formatted(tableName, location));
+        }
+
         return new HudiTableHandle(
                 tableName.getSchemaName(),
                 tableName.getTableName(),
@@ -132,14 +136,18 @@ public class HudiMetadata
         if (tableOptional.isEmpty()) {
             return Optional.empty();
         }
-        switch (name.getTableType()) {
-            case DATA:
-                break;
-            case TIMELINE:
-                SchemaTableName systemTableName = new SchemaTableName(tableName.getSchemaName(), name.getTableNameWithType());
-                return Optional.of(new TimelineTable(fileSystemFactory.create(session), systemTableName, tableOptional.get()));
+        if (!isHudiTable(tableOptional.get())) {
+            return Optional.empty();
         }
-        return Optional.empty();
+        return switch (name.getTableType()) {
+            case DATA ->
+                // TODO (https://github.com/trinodb/trino/issues/17973) remove DATA table type
+                    Optional.empty();
+            case TIMELINE -> {
+                SchemaTableName systemTableName = new SchemaTableName(tableName.getSchemaName(), name.getTableNameWithType());
+                yield Optional.of(new TimelineTable(fileSystemFactory.create(session), systemTableName, tableOptional.get()));
+            }
+        };
     }
 
     @Override
@@ -166,6 +174,7 @@ public class HudiMetadata
         return Optional.of(new ConstraintApplicationResult<>(
                 newHudiTableHandle,
                 newHudiTableHandle.getRegularPredicates().transformKeys(ColumnHandle.class::cast),
+                constraint.getExpression(),
                 false));
     }
 
@@ -196,7 +205,7 @@ public class HudiMetadata
     {
         ImmutableList.Builder<SchemaTableName> tableNames = ImmutableList.builder();
         for (String schemaName : listSchemas(session, optionalSchemaName)) {
-            for (String tableName : metastore.getAllTables(schemaName)) {
+            for (String tableName : metastore.getTables(schemaName)) {
                 tableNames.add(new SchemaTableName(schemaName, tableName));
             }
         }

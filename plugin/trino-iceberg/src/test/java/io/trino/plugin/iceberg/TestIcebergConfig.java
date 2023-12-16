@@ -17,13 +17,15 @@ import com.google.common.collect.ImmutableMap;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.trino.plugin.hive.HiveCompressionCodec;
-import org.testng.annotations.Test;
+import jakarta.validation.constraints.AssertFalse;
+import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
 import static io.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
 import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
 import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
+import static io.airlift.testing.ValidationAssertions.assertFailsValidation;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.trino.plugin.hive.HiveCompressionCodec.ZSTD;
@@ -41,7 +43,7 @@ public class TestIcebergConfig
     public void testDefaults()
     {
         assertRecordedDefaults(recordDefaults(IcebergConfig.class)
-                .setFileFormat(ORC)
+                .setFileFormat(PARQUET)
                 .setCompressionCodec(ZSTD)
                 .setUseFileSizeFromMetadata(true)
                 .setMaxPartitionsPerWriter(100)
@@ -58,17 +60,20 @@ public class TestIcebergConfig
                 .setRemoveOrphanFilesMinRetention(new Duration(7, DAYS))
                 .setDeleteSchemaLocationsFallback(false)
                 .setTargetMaxFileSize(DataSize.of(1, GIGABYTE))
+                .setIdleWriterMinFileSize(DataSize.of(16, MEGABYTE))
                 .setMinimumAssignedSplitWeight(0.05)
+                .setHideMaterializedViewStorageTable(true)
                 .setMaterializedViewsStorageSchema(null)
                 .setRegisterTableProcedureEnabled(false)
-                .setSortedWritingEnabled(true));
+                .setSortedWritingEnabled(true)
+                .setQueryPartitionFilterRequired(false));
     }
 
     @Test
     public void testExplicitPropertyMappings()
     {
         Map<String, String> properties = ImmutableMap.<String, String>builder()
-                .put("iceberg.file-format", "Parquet")
+                .put("iceberg.file-format", "ORC")
                 .put("iceberg.compression-codec", "NONE")
                 .put("iceberg.use-file-size-from-metadata", "false")
                 .put("iceberg.max-partitions-per-writer", "222")
@@ -85,14 +90,17 @@ public class TestIcebergConfig
                 .put("iceberg.remove_orphan_files.min-retention", "14h")
                 .put("iceberg.delete-schema-locations-fallback", "true")
                 .put("iceberg.target-max-file-size", "1MB")
+                .put("iceberg.idle-writer-min-file-size", "1MB")
                 .put("iceberg.minimum-assigned-split-weight", "0.01")
+                .put("iceberg.materialized-views.hide-storage-table", "false")
                 .put("iceberg.materialized-views.storage-schema", "mv_storage_schema")
                 .put("iceberg.register-table-procedure.enabled", "true")
                 .put("iceberg.sorted-writing-enabled", "false")
+                .put("iceberg.query-partition-filter-required", "true")
                 .buildOrThrow();
 
         IcebergConfig expected = new IcebergConfig()
-                .setFileFormat(PARQUET)
+                .setFileFormat(ORC)
                 .setCompressionCodec(HiveCompressionCodec.NONE)
                 .setUseFileSizeFromMetadata(false)
                 .setMaxPartitionsPerWriter(222)
@@ -109,11 +117,26 @@ public class TestIcebergConfig
                 .setRemoveOrphanFilesMinRetention(new Duration(14, HOURS))
                 .setDeleteSchemaLocationsFallback(true)
                 .setTargetMaxFileSize(DataSize.of(1, MEGABYTE))
+                .setIdleWriterMinFileSize(DataSize.of(1, MEGABYTE))
                 .setMinimumAssignedSplitWeight(0.01)
+                .setHideMaterializedViewStorageTable(false)
                 .setMaterializedViewsStorageSchema("mv_storage_schema")
                 .setRegisterTableProcedureEnabled(true)
-                .setSortedWritingEnabled(false);
+                .setSortedWritingEnabled(false)
+                .setQueryPartitionFilterRequired(true);
 
         assertFullMapping(properties, expected);
+    }
+
+    @Test
+    public void testValidation()
+    {
+        assertFailsValidation(
+                new IcebergConfig()
+                        .setHideMaterializedViewStorageTable(true)
+                        .setMaterializedViewsStorageSchema("storage_schema"),
+                "storageSchemaSetWhenHidingIsEnabled",
+                "iceberg.materialized-views.storage-schema may only be set when iceberg.materialized-views.hide-storage-table is set to false",
+                AssertFalse.class);
     }
 }

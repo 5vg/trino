@@ -44,8 +44,8 @@ import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.SchemaTablePrefix;
 import io.trino.spi.connector.TableFunctionApplicationResult;
 import io.trino.spi.connector.TableNotFoundException;
+import io.trino.spi.function.table.ConnectorTableFunctionHandle;
 import io.trino.spi.predicate.TupleDomain;
-import io.trino.spi.ptf.ConnectorTableFunctionHandle;
 import io.trino.spi.statistics.ComputedStatistics;
 import io.trino.spi.type.Type;
 
@@ -273,6 +273,7 @@ public class CassandraMetadata
                         // TODO this should probably be AND-ed with handle.getClusteringKeyPredicates()
                         clusteringKeyPredicates)),
                         unenforcedConstraint,
+                        constraint.getExpression(),
                         false));
     }
 

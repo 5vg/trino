@@ -21,6 +21,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import io.airlift.stats.TestingGcMonitor;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
@@ -53,8 +54,6 @@ import io.trino.sql.planner.plan.PlanNodeId;
 import io.trino.sql.planner.plan.TableScanNode;
 import io.trino.testing.TestingMetadata.TestingColumnHandle;
 import org.joda.time.DateTime;
-
-import javax.annotation.concurrent.GuardedBy;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -121,6 +120,7 @@ public class MockRemoteTaskFactory
                 ImmutableList.of(sourceId),
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(symbol)),
                 StatsAndCosts.empty(),
+                ImmutableList.of(),
                 ImmutableList.of(),
                 Optional.empty());
 
@@ -212,6 +212,7 @@ public class MockRemoteTaskFactory
                     new TestingGcMonitor(),
                     executor,
                     scheduledExecutor,
+                    scheduledExecutor,
                     DataSize.of(1, MEGABYTE),
                     spillSpaceTracker);
             this.taskContext = queryContext.addTaskContext(taskStateMachine, TEST_SESSION, () -> {}, true, true);
@@ -285,6 +286,7 @@ public class MockRemoteTaskFactory
                     combinedSplitsInfo.getCount() - queuedSplitsInfo.getCount(),
                     outputBuffer.getStatus(),
                     stats.getOutputDataSize(),
+                    stats.getWriterInputDataSize(),
                     stats.getPhysicalWrittenDataSize(),
                     stats.getMaxWriterCount(),
                     stats.getUserMemoryReservation(),

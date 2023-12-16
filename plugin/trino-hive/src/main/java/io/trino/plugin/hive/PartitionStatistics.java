@@ -17,14 +17,14 @@ package io.trino.plugin.hive;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableMap;
+import com.google.errorprone.annotations.Immutable;
 import io.trino.plugin.hive.metastore.HiveColumnStatistics;
-
-import javax.annotation.concurrent.Immutable;
 
 import java.util.Map;
 import java.util.Objects;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static java.util.Objects.requireNonNull;
 
 @Immutable
@@ -61,11 +61,6 @@ public class PartitionStatistics
         return columnStatistics;
     }
 
-    public PartitionStatistics withAdjustedRowCount(long adjustment)
-    {
-        return new PartitionStatistics(basicStatistics.withAdjustedRowCount(adjustment), columnStatistics);
-    }
-
     @Override
     public boolean equals(Object o)
     {
@@ -98,6 +93,20 @@ public class PartitionStatistics
     public static Builder builder()
     {
         return new Builder();
+    }
+
+    public PartitionStatistics withBasicStatistics(HiveBasicStatistics basicStatistics)
+    {
+        return new PartitionStatistics(basicStatistics, columnStatistics);
+    }
+
+    public PartitionStatistics withEmptyColumnStatisticsRemoved()
+    {
+        return new PartitionStatistics(
+                basicStatistics,
+                columnStatistics.entrySet().stream()
+                        .filter(entry -> !entry.getValue().equals(HiveColumnStatistics.empty()))
+                        .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue)));
     }
 
     public static class Builder

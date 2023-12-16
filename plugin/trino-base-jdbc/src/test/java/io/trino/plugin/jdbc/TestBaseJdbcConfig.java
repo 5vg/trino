@@ -16,9 +16,8 @@ package io.trino.plugin.jdbc;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.configuration.ConfigurationFactory;
 import io.airlift.units.Duration;
-import org.testng.annotations.Test;
-
-import javax.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.AssertTrue;
+import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
@@ -27,15 +26,13 @@ import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDe
 import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
 import static io.airlift.testing.ValidationAssertions.assertFailsValidation;
 import static io.airlift.testing.ValidationAssertions.assertValidates;
-import static java.util.concurrent.TimeUnit.MINUTES;
+import static io.airlift.units.Duration.ZERO;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TestBaseJdbcConfig
 {
-    private static final Duration ZERO = Duration.succinctDuration(0, MINUTES);
-
     @Test
     public void testDefaults()
     {
@@ -45,6 +42,7 @@ public class TestBaseJdbcConfig
                 .setMetadataCacheTtl(ZERO)
                 .setSchemaNamesCacheTtl(null)
                 .setTableNamesCacheTtl(null)
+                .setStatisticsCacheTtl(null)
                 .setCacheMissing(false)
                 .setCacheMaximumSize(10000));
     }
@@ -58,6 +56,7 @@ public class TestBaseJdbcConfig
                 .put("metadata.cache-ttl", "1s")
                 .put("metadata.schemas.cache-ttl", "2s")
                 .put("metadata.tables.cache-ttl", "3s")
+                .put("metadata.statistics.cache-ttl", "7s")
                 .put("metadata.cache-missing", "true")
                 .put("metadata.cache-maximum-size", "5000")
                 .buildOrThrow();
@@ -68,6 +67,7 @@ public class TestBaseJdbcConfig
                 .setMetadataCacheTtl(new Duration(1, SECONDS))
                 .setSchemaNamesCacheTtl(new Duration(2, SECONDS))
                 .setTableNamesCacheTtl(new Duration(3, SECONDS))
+                .setStatisticsCacheTtl(new Duration(7, SECONDS))
                 .setCacheMissing(true)
                 .setCacheMaximumSize(5000);
 
@@ -80,9 +80,9 @@ public class TestBaseJdbcConfig
     public void testConnectionUrlIsValid()
     {
         assertThatThrownBy(() -> buildConfig(ImmutableMap.of("connection-url", "jdbc:")))
-                .hasMessageContaining("must match the following regular expression: ^jdbc:[a-z0-9]+:(?s:.*)$");
+                .hasMessageContaining("must match \"^jdbc:[a-z0-9]+:(?s:.*)$\"");
         assertThatThrownBy(() -> buildConfig(ImmutableMap.of("connection-url", "jdbc:protocol")))
-                .hasMessageContaining("must match the following regular expression: ^jdbc:[a-z0-9]+:(?s:.*)$");
+                .hasMessageContaining("must match \"^jdbc:[a-z0-9]+:(?s:.*)$\"");
         buildConfig(ImmutableMap.of("connection-url", "jdbc:protocol:uri"));
         buildConfig(ImmutableMap.of("connection-url", "jdbc:protocol:"));
     }
@@ -99,22 +99,30 @@ public class TestBaseJdbcConfig
 
         assertValidates(new BaseJdbcConfig()
                 .setConnectionUrl("jdbc:h2:mem:config")
+                .setStatisticsCacheTtl(new Duration(7, SECONDS))
+                .setCacheMaximumSize(5000));
+
+        assertValidates(new BaseJdbcConfig()
+                .setConnectionUrl("jdbc:h2:mem:config")
                 .setMetadataCacheTtl(new Duration(1, SECONDS)));
 
-        assertFailsValidation(new BaseJdbcConfig()
-                .setCacheMaximumSize(5000),
+        assertFailsValidation(
+                new BaseJdbcConfig()
+                        .setCacheMaximumSize(5000),
                 "cacheMaximumSizeConsistent",
-                "metadata.cache-ttl must be set to a non-zero value when metadata.cache-maximum-size is set",
+                "metadata.cache-ttl or metadata.statistics.cache-ttl must be set to a non-zero value when metadata.cache-maximum-size is set",
                 AssertTrue.class);
 
-        assertFailsValidation(new BaseJdbcConfig()
-                .setSchemaNamesCacheTtl(new Duration(1, SECONDS)),
+        assertFailsValidation(
+                new BaseJdbcConfig()
+                        .setSchemaNamesCacheTtl(new Duration(1, SECONDS)),
                 "schemaNamesCacheTtlConsistent",
                 "metadata.schemas.cache-ttl must not be set when metadata.cache-ttl is not set",
                 AssertTrue.class);
 
-        assertFailsValidation(new BaseJdbcConfig()
-                .setTableNamesCacheTtl(new Duration(1, SECONDS)),
+        assertFailsValidation(
+                new BaseJdbcConfig()
+                        .setTableNamesCacheTtl(new Duration(1, SECONDS)),
                 "tableNamesCacheTtlConsistent",
                 "metadata.tables.cache-ttl must not be set when metadata.cache-ttl is not set",
                 AssertTrue.class);

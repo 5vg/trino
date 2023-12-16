@@ -15,6 +15,8 @@ package io.trino.execution;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
+import com.google.errorprone.annotations.ThreadSafe;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.opentelemetry.api.trace.Span;
@@ -29,9 +31,6 @@ import io.trino.sql.planner.PlanFragment;
 import io.trino.sql.planner.plan.DynamicFilterId;
 import io.trino.sql.planner.plan.PlanNodeId;
 
-import javax.annotation.concurrent.GuardedBy;
-import javax.annotation.concurrent.ThreadSafe;
-
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.SystemSessionProperties.isEnableCoordinatorDynamicFiltersDistribution;
@@ -330,9 +330,18 @@ public final class SqlStage
     }
 
     @Override
-    public String toString()
+    // for debugging
+    public synchronized String toString()
     {
-        return stateMachine.toString();
+        return toStringHelper(this)
+                .add("stateMachine", stateMachine)
+                .add("summarizeTaskInfo", summarizeTaskInfo)
+                .add("outboundDynamicFilterIds", outboundDynamicFilterIds)
+                .add("tasks", tasks)
+                .add("allTasks", allTasks)
+                .add("finishedTasks", finishedTasks)
+                .add("tasksWithFinalInfo", tasksWithFinalInfo)
+                .toString();
     }
 
     private class MemoryUsageListener

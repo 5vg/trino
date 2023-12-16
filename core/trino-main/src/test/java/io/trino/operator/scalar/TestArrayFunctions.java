@@ -21,6 +21,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.parallel.Execution;
 
 import static io.trino.spi.type.DoubleType.DOUBLE;
 import static io.trino.spi.type.IntegerType.INTEGER;
@@ -28,8 +29,10 @@ import static java.util.Collections.nCopies;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.TestInstance.Lifecycle.PER_CLASS;
+import static org.junit.jupiter.api.parallel.ExecutionMode.CONCURRENT;
 
 @TestInstance(PER_CLASS)
+@Execution(CONCURRENT)
 public class TestArrayFunctions
 {
     private QueryAssertions assertions;
@@ -59,7 +62,7 @@ public class TestArrayFunctions
                 .binding("c", "3"))
                 .matches("ARRAY[1, 2, 3]");
 
-        assertThatThrownBy(() -> assertions.expression("array[" + Joiner.on(", ").join(nCopies(255, "rand()")) + "]").evaluate())
+        assertThatThrownBy(assertions.expression("array[" + Joiner.on(", ").join(nCopies(255, "rand()")) + "]")::evaluate)
                 .isInstanceOf(TrinoException.class)
                 .hasMessage("Too many arguments for array constructor");
     }
@@ -74,7 +77,7 @@ public class TestArrayFunctions
         assertThat(assertions.function("concat", "ARRAY[1]", "ARRAY[2]", "ARRAY[3]"))
                 .matches("ARRAY[1, 2, 3]");
 
-        assertThatThrownBy(() -> assertions.expression("CONCAT(" + Joiner.on(", ").join(nCopies(128, "array[1]")) + ")").evaluate())
+        assertThatThrownBy(assertions.expression("CONCAT(" + Joiner.on(", ").join(nCopies(128, "array[1]")) + ")")::evaluate)
                 .isInstanceOf(TrinoException.class)
                 .hasMessage("line 1:12: Too many arguments for function call concat()");
     }

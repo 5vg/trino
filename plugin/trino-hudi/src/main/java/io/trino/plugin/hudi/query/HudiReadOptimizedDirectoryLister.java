@@ -13,11 +13,11 @@
  */
 package io.trino.plugin.hudi.query;
 
+import io.airlift.units.DataSize;
+import io.trino.filesystem.FileEntry.Block;
 import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.plugin.hive.metastore.Column;
 import io.trino.plugin.hive.metastore.HiveMetastore;
-import io.trino.plugin.hive.metastore.MetastoreUtil;
-import io.trino.plugin.hive.metastore.Partition;
 import io.trino.plugin.hive.metastore.Table;
 import io.trino.plugin.hudi.HudiFileStatus;
 import io.trino.plugin.hudi.HudiTableHandle;
@@ -26,70 +26,48 @@ import io.trino.plugin.hudi.partition.HiveHudiPartitionInfo;
 import io.trino.plugin.hudi.partition.HudiPartitionInfo;
 import io.trino.plugin.hudi.table.HudiTableFileSystemView;
 import io.trino.plugin.hudi.table.HudiTableMetaClient;
-import io.trino.spi.connector.SchemaTableName;
-import io.trino.spi.connector.TableNotFoundException;
-import io.trino.spi.predicate.TupleDomain;
 
-import java.util.Collections;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static java.lang.Math.max;
+import static java.lang.Math.min;
 
 public class HudiReadOptimizedDirectoryLister
         implements HudiDirectoryLister
 {
-    private final HudiTableHandle tableHandle;
-    private final HiveMetastore hiveMetastore;
-    private final Table hiveTable;
-    private final SchemaTableName tableName;
-    private final List<HiveColumnHandle> partitionColumnHandles;
-    private final HudiTableFileSystemView fileSystemView;
-    private final TupleDomain<String> partitionKeysFilter;
-    private final List<Column> partitionColumns;
+    private static final long MIN_BLOCK_SIZE = DataSize.of(32, MEGABYTE).toBytes();
 
-    private List<String> hivePartitionNames;
+    private final HudiTableFileSystemView fileSystemView;
+    private final List<Column> partitionColumns;
+    private final Map<String, HudiPartitionInfo> allPartitionInfoMap;
 
     public HudiReadOptimizedDirectoryLister(
             HudiTableHandle tableHandle,
             HudiTableMetaClient metaClient,
             HiveMetastore hiveMetastore,
             Table hiveTable,
-            List<HiveColumnHandle> partitionColumnHandles)
+            List<HiveColumnHandle> partitionColumnHandles,
+            List<String> hivePartitionNames)
     {
-        this.tableHandle = tableHandle;
-        this.tableName = tableHandle.getSchemaTableName();
-        this.hiveMetastore = hiveMetastore;
-        this.hiveTable = hiveTable;
-        this.partitionColumnHandles = partitionColumnHandles;
         this.fileSystemView = new HudiTableFileSystemView(metaClient, metaClient.getActiveTimeline().getCommitsTimeline().filterCompletedInstants());
-        this.partitionKeysFilter = MetastoreUtil.computePartitionKeyFilter(partitionColumnHandles, tableHandle.getPartitionPredicates());
         this.partitionColumns = hiveTable.getPartitionColumns();
-    }
-
-    @Override
-    public List<HudiPartitionInfo> getPartitionsToScan()
-    {
-        if (hivePartitionNames == null) {
-            hivePartitionNames = partitionColumns.isEmpty()
-                    ? Collections.singletonList("")
-                    : getPartitionNamesFromHiveMetastore(partitionKeysFilter);
-        }
-
-        List<HudiPartitionInfo> allPartitionInfoList = hivePartitionNames.stream()
-                .map(hivePartitionName -> new HiveHudiPartitionInfo(
-                        hivePartitionName,
-                        partitionColumns,
-                        partitionColumnHandles,
-                        tableHandle.getPartitionPredicates(),
-                        hiveTable,
-                        hiveMetastore))
-                .collect(toImmutableList());
-
-        return allPartitionInfoList.stream()
-                .filter(partitionInfo -> partitionInfo.getHivePartitionKeys().isEmpty() || partitionInfo.doesMatchPredicates())
-                .collect(toImmutableList());
+        this.allPartitionInfoMap = hivePartitionNames.stream()
+                .collect(Collectors.toMap(
+                        Function.identity(),
+                        hivePartitionName -> new HiveHudiPartitionInfo(
+                                hivePartitionName,
+                                partitionColumns,
+                                partitionColumnHandles,
+                                tableHandle.getPartitionPredicates(),
+                                hiveTable,
+                                hiveMetastore)));
     }
 
     @Override
@@ -102,23 +80,14 @@ public class HudiReadOptimizedDirectoryLister
                         false,
                         fileEntry.length(),
                         fileEntry.lastModified().toEpochMilli(),
-                        fileEntry.blocks().map(listOfBlocks -> (!listOfBlocks.isEmpty()) ? listOfBlocks.get(0).length() : 0).orElse(0L)))
+                        max(blockSize(fileEntry.blocks()), min(fileEntry.length(), MIN_BLOCK_SIZE))))
                 .collect(toImmutableList());
     }
 
-    private List<String> getPartitionNamesFromHiveMetastore(TupleDomain<String> partitionKeysFilter)
-    {
-        return hiveMetastore.getPartitionNamesByFilter(
-                tableName.getSchemaName(),
-                tableName.getTableName(),
-                partitionColumns.stream().map(Column::getName).collect(toImmutableList()),
-                partitionKeysFilter).orElseThrow(() -> new TableNotFoundException(tableHandle.getSchemaTableName()));
-    }
-
     @Override
-    public Map<String, Optional<Partition>> getPartitions(List<String> partitionNames)
+    public Optional<HudiPartitionInfo> getPartitionInfo(String partition)
     {
-        return hiveMetastore.getPartitionsByNames(hiveTable, partitionNames);
+        return Optional.ofNullable(allPartitionInfoMap.get(partition));
     }
 
     @Override
@@ -127,5 +96,14 @@ public class HudiReadOptimizedDirectoryLister
         if (fileSystemView != null && !fileSystemView.isClosed()) {
             fileSystemView.close();
         }
+    }
+
+    private static long blockSize(Optional<List<Block>> blocks)
+    {
+        return blocks.stream()
+                .flatMap(Collection::stream)
+                .mapToLong(Block::length)
+                .findFirst()
+                .orElse(0);
     }
 }

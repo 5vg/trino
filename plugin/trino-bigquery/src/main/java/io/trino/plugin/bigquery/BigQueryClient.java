@@ -14,6 +14,7 @@
 package io.trino.plugin.bigquery;
 
 import com.google.cloud.bigquery.BigQuery;
+import com.google.cloud.bigquery.BigQuery.DatasetDeleteOption;
 import com.google.cloud.bigquery.BigQueryException;
 import com.google.cloud.bigquery.Dataset;
 import com.google.cloud.bigquery.DatasetId;
@@ -37,7 +38,7 @@ import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
-import io.trino.collect.cache.EvictableCacheBuilder;
+import io.trino.cache.EvictableCacheBuilder;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.SchemaTableName;
@@ -84,6 +85,7 @@ public class BigQueryClient
 
     private final BigQuery bigQuery;
     private final BigQueryLabelFactory labelFactory;
+    private final BigQueryTypeManager typeManager;
     private final ViewMaterializationCache materializationCache;
     private final boolean caseInsensitiveNameMatching;
     private final LoadingCache<String, List<Dataset>> remoteDatasetCache;
@@ -92,6 +94,7 @@ public class BigQueryClient
     public BigQueryClient(
             BigQuery bigQuery,
             BigQueryLabelFactory labelFactory,
+            BigQueryTypeManager typeManager,
             boolean caseInsensitiveNameMatching,
             ViewMaterializationCache materializationCache,
             Duration metadataCacheTtl,
@@ -99,6 +102,7 @@ public class BigQueryClient
     {
         this.bigQuery = requireNonNull(bigQuery, "bigQuery is null");
         this.labelFactory = requireNonNull(labelFactory, "labelFactory is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.materializationCache = requireNonNull(materializationCache, "materializationCache is null");
         this.caseInsensitiveNameMatching = caseInsensitiveNameMatching;
         this.remoteDatasetCache = EvictableCacheBuilder.newBuilder()
@@ -106,6 +110,11 @@ public class BigQueryClient
                 .shareNothingWhenDisabled()
                 .build(CacheLoader.from(this::listDatasetsFromBigQuery));
         this.configProjectId = requireNonNull(configProjectId, "projectId is null");
+    }
+
+    public Optional<RemoteDatabaseObject> toRemoteDataset(DatasetId datasetId)
+    {
+        return toRemoteDataset(datasetId.getProject(), datasetId.getDataset());
     }
 
     public Optional<RemoteDatabaseObject> toRemoteDataset(String projectId, String datasetName)
@@ -217,6 +226,16 @@ public class BigQueryClient
         return projectId;
     }
 
+    protected DatasetId toDatasetId(String schemaName)
+    {
+        return DatasetId.of(getProjectId(), schemaName);
+    }
+
+    protected String toSchemaName(DatasetId datasetId)
+    {
+        return datasetId.getDataset();
+    }
+
     public Iterable<Dataset> listDatasets(String projectId)
     {
         try {
@@ -251,9 +270,14 @@ public class BigQueryClient
         bigQuery.create(datasetInfo);
     }
 
-    public void dropSchema(DatasetId datasetId)
+    public void dropSchema(DatasetId datasetId, boolean cascade)
     {
-        bigQuery.delete(datasetId);
+        if (cascade) {
+            bigQuery.delete(datasetId, DatasetDeleteOption.deleteContents());
+        }
+        else {
+            bigQuery.delete(datasetId);
+        }
     }
 
     public void createTable(TableInfo tableInfo)
@@ -271,10 +295,10 @@ public class BigQueryClient
         return bigQuery.create(jobInfo);
     }
 
-    public void executeUpdate(ConnectorSession session, QueryJobConfiguration job)
+    public long executeUpdate(ConnectorSession session, QueryJobConfiguration job)
     {
         log.debug("Execute query: %s", job.getQuery());
-        execute(session, job);
+        return execute(session, job).getTotalRows();
     }
 
     public TableResult executeQuery(ConnectorSession session, String sql)
@@ -328,7 +352,7 @@ public class BigQueryClient
         return selectSql(table, columns, filter);
     }
 
-    private static String selectSql(TableId table, String formattedColumns, Optional<String> filter)
+    public static String selectSql(TableId table, String formattedColumns, Optional<String> filter)
     {
         String tableName = fullTableName(table);
         String query = format("SELECT %s FROM `%s`", formattedColumns, tableName);
@@ -382,7 +406,7 @@ public class BigQueryClient
         return buildColumnHandles(tableInfo);
     }
 
-    public static List<BigQueryColumnHandle> buildColumnHandles(TableInfo tableInfo)
+    public List<BigQueryColumnHandle> buildColumnHandles(TableInfo tableInfo)
     {
         Schema schema = tableInfo.getDefinition().getSchema();
         if (schema == null) {
@@ -391,8 +415,8 @@ public class BigQueryClient
         }
         return schema.getFields()
                 .stream()
-                .filter(Conversions::isSupportedType)
-                .map(Conversions::toColumnHandle)
+                .filter(typeManager::isSupportedType)
+                .map(typeManager::toColumnHandle)
                 .collect(toImmutableList());
     }
 

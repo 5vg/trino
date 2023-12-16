@@ -19,7 +19,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.trino.plugin.hive.HiveColumnHandle;
 import io.trino.plugin.hive.HivePartitionKey;
-import io.trino.spi.HostAddress;
 import io.trino.spi.SplitWeight;
 import io.trino.spi.connector.ConnectorSplit;
 import io.trino.spi.predicate.TupleDomain;
@@ -28,17 +27,21 @@ import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
+import static io.airlift.slice.SizeOf.estimatedSizeOf;
+import static io.airlift.slice.SizeOf.instanceSize;
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 public class HudiSplit
         implements ConnectorSplit
 {
+    private static final int INSTANCE_SIZE = toIntExact(instanceSize(HudiSplit.class));
+
     private final String location;
     private final long start;
     private final long length;
     private final long fileSize;
     private final long fileModifiedTime;
-    private final List<HostAddress> addresses;
     private final TupleDomain<HiveColumnHandle> predicate;
     private final List<HivePartitionKey> partitionKeys;
     private final SplitWeight splitWeight;
@@ -50,7 +53,6 @@ public class HudiSplit
             @JsonProperty("length") long length,
             @JsonProperty("fileSize") long fileSize,
             @JsonProperty("fileModifiedTime") long fileModifiedTime,
-            @JsonProperty("addresses") List<HostAddress> addresses,
             @JsonProperty("predicate") TupleDomain<HiveColumnHandle> predicate,
             @JsonProperty("partitionKeys") List<HivePartitionKey> partitionKeys,
             @JsonProperty("splitWeight") SplitWeight splitWeight)
@@ -64,23 +66,9 @@ public class HudiSplit
         this.length = length;
         this.fileSize = fileSize;
         this.fileModifiedTime = fileModifiedTime;
-        this.addresses = ImmutableList.copyOf(requireNonNull(addresses, "addresses is null"));
         this.predicate = requireNonNull(predicate, "predicate is null");
         this.partitionKeys = ImmutableList.copyOf(requireNonNull(partitionKeys, "partitionKeys is null"));
         this.splitWeight = requireNonNull(splitWeight, "splitWeight is null");
-    }
-
-    @Override
-    public boolean isRemotelyAccessible()
-    {
-        return true;
-    }
-
-    @JsonProperty
-    @Override
-    public List<HostAddress> getAddresses()
-    {
-        return addresses;
     }
 
     @Override
@@ -142,6 +130,16 @@ public class HudiSplit
     public List<HivePartitionKey> getPartitionKeys()
     {
         return partitionKeys;
+    }
+
+    @Override
+    public long getRetainedSizeInBytes()
+    {
+        return INSTANCE_SIZE
+                + estimatedSizeOf(location)
+                + splitWeight.getRetainedSizeInBytes()
+                + predicate.getRetainedSizeInBytes(HiveColumnHandle::getRetainedSizeInBytes)
+                + estimatedSizeOf(partitionKeys, HivePartitionKey::getEstimatedSizeInBytes);
     }
 
     @Override

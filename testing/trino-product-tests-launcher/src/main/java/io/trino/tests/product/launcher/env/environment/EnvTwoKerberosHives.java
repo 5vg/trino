@@ -26,8 +26,7 @@ import io.trino.tests.product.launcher.env.common.HadoopKerberos;
 import io.trino.tests.product.launcher.env.common.Standard;
 import io.trino.tests.product.launcher.env.common.TestsEnvironment;
 import io.trino.tests.product.launcher.testcontainers.PortBinder;
-
-import javax.annotation.PreDestroy;
+import jakarta.annotation.PreDestroy;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -133,6 +132,9 @@ public final class EnvTwoKerberosHives
                 .withFileSystemBind(keytabsHostDirectory, "/presto_keytabs", READ_WRITE)
                 .withCopyFileToContainer(
                         forHostPath(configDir.getPath("hadoop-master-2-copy-keytabs.sh")),
-                        CONTAINER_HADOOP_INIT_D + "copy-kerberos.sh");
+                        CONTAINER_HADOOP_INIT_D + "copy-kerberos.sh")
+                .withCopyFileToContainer(
+                        forHostPath(configDir.getPath("update-location.sh")),
+                        CONTAINER_HADOOP_INIT_D + "update-location.sh");
     }
 }

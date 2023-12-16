@@ -18,20 +18,21 @@ import com.google.cloud.bigquery.BigQueryOptions;
 import com.google.common.cache.CacheBuilder;
 import com.google.inject.Inject;
 import io.airlift.units.Duration;
-import io.trino.collect.cache.NonEvictableCache;
+import io.trino.cache.NonEvictableCache;
 import io.trino.spi.connector.ConnectorSession;
 
 import java.util.Optional;
 import java.util.Set;
 
-import static io.trino.collect.cache.CacheUtils.uncheckedCacheGet;
-import static io.trino.collect.cache.SafeCaches.buildNonEvictableCache;
+import static io.trino.cache.CacheUtils.uncheckedCacheGet;
+import static io.trino.cache.SafeCaches.buildNonEvictableCache;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 public class BigQueryClientFactory
 {
     private final IdentityCacheMapping identityCacheMapping;
+    private final BigQueryTypeManager typeManager;
     private final Optional<String> projectId;
     private final boolean caseInsensitiveNameMatching;
     private final ViewMaterializationCache materializationCache;
@@ -44,12 +45,14 @@ public class BigQueryClientFactory
     @Inject
     public BigQueryClientFactory(
             IdentityCacheMapping identityCacheMapping,
+            BigQueryTypeManager typeManager,
             BigQueryConfig bigQueryConfig,
             ViewMaterializationCache materializationCache,
             BigQueryLabelFactory labelFactory,
             Set<BigQueryOptionsConfigurer> optionsConfigurers)
     {
         this.identityCacheMapping = requireNonNull(identityCacheMapping, "identityCacheMapping is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
         requireNonNull(bigQueryConfig, "bigQueryConfig is null");
         this.projectId = bigQueryConfig.getProjectId();
         this.caseInsensitiveNameMatching = bigQueryConfig.isCaseInsensitiveNameMatching();
@@ -72,7 +75,7 @@ public class BigQueryClientFactory
 
     protected BigQueryClient createBigQueryClient(ConnectorSession session)
     {
-        return new BigQueryClient(createBigQuery(session), labelFactory, caseInsensitiveNameMatching, materializationCache, metadataCacheTtl, projectId);
+        return new BigQueryClient(createBigQuery(session), labelFactory, typeManager, caseInsensitiveNameMatching, materializationCache, metadataCacheTtl, projectId);
     }
 
     protected BigQuery createBigQuery(ConnectorSession session)

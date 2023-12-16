@@ -580,8 +580,8 @@ public final class DateTimes
         int minute = Integer.parseInt(matcher.group("minute"));
         int second = matcher.group("second") == null ? 0 : Integer.parseInt(matcher.group("second"));
         int offsetSign = matcher.group("sign").equals("+") ? 1 : -1;
-        int offsetHour = Integer.parseInt((matcher.group("offsetHour")));
-        int offsetMinute = Integer.parseInt((matcher.group("offsetMinute")));
+        int offsetHour = Integer.parseInt(matcher.group("offsetHour"));
+        int offsetMinute = Integer.parseInt(matcher.group("offsetMinute"));
 
         if (hour > 23 || minute > 59 || second > 59 || !isValidOffset(offsetHour, offsetMinute)) {
             throw new IllegalArgumentException("Invalid TIME WITH TIME ZONE: " + value);
@@ -610,8 +610,8 @@ public final class DateTimes
         int minute = Integer.parseInt(matcher.group("minute"));
         int second = matcher.group("second") == null ? 0 : Integer.parseInt(matcher.group("second"));
         int offsetSign = matcher.group("sign").equals("+") ? 1 : -1;
-        int offsetHour = Integer.parseInt((matcher.group("offsetHour")));
-        int offsetMinute = Integer.parseInt((matcher.group("offsetMinute")));
+        int offsetHour = Integer.parseInt(matcher.group("offsetHour"));
+        int offsetMinute = Integer.parseInt(matcher.group("offsetMinute"));
 
         if (hour > 23 || minute > 59 || second > 59 || !isValidOffset(offsetHour, offsetMinute)) {
             throw new IllegalArgumentException("Invalid TIME WITH TIME ZONE: " + value);
@@ -634,7 +634,7 @@ public final class DateTimes
         checkArgument(precision > MAX_SHORT_PRECISION && precision <= TimestampType.MAX_PRECISION, "Precision is out of range");
         return new LongTimestamp(
                 start.getEpochSecond() * MICROSECONDS_PER_SECOND + start.getLong(MICRO_OF_SECOND),
-                (int) round((start.getNano() % PICOSECONDS_PER_NANOSECOND) * PICOSECONDS_PER_NANOSECOND, (int) (TimestampType.MAX_PRECISION - precision)));
+                (int) round((start.getNano() % PICOSECONDS_PER_NANOSECOND) * (long) PICOSECONDS_PER_NANOSECOND, (int) (TimestampType.MAX_PRECISION - precision)));
     }
 
     public static LongTimestamp longTimestamp(long epochSecond, long fractionInPicos)
@@ -649,7 +649,7 @@ public final class DateTimes
         checkArgument(precision <= TimestampWithTimeZoneType.MAX_PRECISION, "Precision is out of range");
 
         long epochMilli = start.toEpochMilli();
-        int picosOfMilli = (int) round((start.getNano() % NANOSECONDS_PER_MILLISECOND) * PICOSECONDS_PER_NANOSECOND, (int) (TimestampWithTimeZoneType.MAX_PRECISION - precision));
+        int picosOfMilli = (int) round((start.getNano() % NANOSECONDS_PER_MILLISECOND) * (long) PICOSECONDS_PER_NANOSECOND, (int) (TimestampWithTimeZoneType.MAX_PRECISION - precision));
         if (picosOfMilli == PICOSECONDS_PER_MILLISECOND) {
             epochMilli++;
             picosOfMilli = 0;

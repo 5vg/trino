@@ -37,7 +37,7 @@ public class EnvSinglenodeSparkIcebergNessie
 {
     private static final int SPARK_THRIFT_PORT = 10213;
     private static final int NESSIE_PORT = 19120;
-    private static final String NESSIE_VERSION = "0.59.0";
+    private static final String NESSIE_VERSION = "0.71.0";
     private static final String SPARK = "spark";
 
     private final DockerFiles dockerFiles;
@@ -70,6 +70,9 @@ public class EnvSinglenodeSparkIcebergNessie
                 .withCopyFileToContainer(
                         forHostPath(dockerFiles.getDockerFilesHostPath("conf/environment/singlenode-spark-iceberg-nessie/spark-defaults.conf")),
                         "/spark/conf/spark-defaults.conf")
+                .withCopyFileToContainer(
+                        forHostPath(dockerFiles.getDockerFilesHostPath("common/spark/log4j2.properties")),
+                        "/spark/conf/log4j2.properties")
                 .withCommand(
                         "spark-submit",
                         "--master", "local[*]",

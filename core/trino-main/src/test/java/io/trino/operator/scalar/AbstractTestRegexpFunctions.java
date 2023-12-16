@@ -29,6 +29,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.parallel.Execution;
 
 import java.util.Collections;
 
@@ -40,8 +41,10 @@ import static io.trino.testing.assertions.TrinoExceptionAssert.assertTrinoExcept
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.TestInstance.Lifecycle.PER_CLASS;
+import static org.junit.jupiter.api.parallel.ExecutionMode.CONCURRENT;
 
 @TestInstance(PER_CLASS)
+@Execution(CONCURRENT)
 public abstract class AbstractTestRegexpFunctions
 {
     private final RegexLibrary regexLibrary;
@@ -178,7 +181,7 @@ public abstract class AbstractTestRegexpFunctions
                 .hasType(createVarcharType(7))
                 .isEqualTo("yxyxyxy");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_replace", "'xxx'", "'x'", "'\\'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_replace", "'xxx'", "'x'", "'\\'")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
         assertThat(assertions.function("regexp_replace", "'xxx xxx xxx'", "'x'", "'$0'"))
@@ -209,13 +212,13 @@ public abstract class AbstractTestRegexpFunctions
                 .hasType(createVarcharType(175))
                 .isEqualTo("1a");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_replace", "'xxx'", "'x'", "'$1'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_replace", "'xxx'", "'x'", "'$1'")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_replace", "'xxx'", "'x'", "'$a'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_replace", "'xxx'", "'x'", "'$a'")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_replace", "'xxx'", "'x'", "'$'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_replace", "'xxx'", "'x'", "'$'")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
         assertThat(assertions.function("regexp_replace", "'wxyz'", "'(?<xyz>[xyz])'", "'${xyz}${xyz}'"))
@@ -234,13 +237,13 @@ public abstract class AbstractTestRegexpFunctions
                 .hasType(createVarcharType(39))
                 .isEqualTo("xyz");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_replace", "'xxx'", "'(?<name>x)'", "'${}'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_replace", "'xxx'", "'(?<name>x)'", "'${}'")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_replace", "'xxx'", "'(?<name>x)'", "'${0}'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_replace", "'xxx'", "'(?<name>x)'", "'${0}'")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_replace", "'xxx'", "'(?<name>x)'", "'${nam}'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_replace", "'xxx'", "'(?<name>x)'", "'${nam}'")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
         assertThat(assertions.function("regexp_replace", "VARCHAR 'x'", "'.*'", "'xxxxx'"))
@@ -598,10 +601,10 @@ public abstract class AbstractTestRegexpFunctions
                 .hasType(createVarcharType(6))
                 .isEqualTo((Object) null);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_extract", "'Hello world bye'", "'\\b[a-z]([a-z]*)'", "-1").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_extract", "'Hello world bye'", "'\\b[a-z]([a-z]*)'", "-1")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_extract", "'Hello world bye'", "'\\b[a-z]([a-z]*)'", "2").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_extract", "'Hello world bye'", "'\\b[a-z]([a-z]*)'", "2")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
     }
 
@@ -632,14 +635,14 @@ public abstract class AbstractTestRegexpFunctions
                 .hasType(new ArrayType(createVarcharType(15)))
                 .isEqualTo(Collections.<String>singletonList(null));
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_extract_all", "'hello'", "'(.)'", "2").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_extract_all", "'hello'", "'(.)'", "2")::evaluate)
                 .hasMessage("Pattern has 1 groups. Cannot access group 2");
 
         assertThat(assertions.function("regexp_extract_all", "'12345'", "''"))
                 .hasType(new ArrayType(createVarcharType(5)))
                 .isEqualTo(ImmutableList.of("", "", "", "", "", ""));
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_extract_all", "'12345'", "'('").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_extract_all", "'12345'", "'('")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
     }
 
@@ -911,13 +914,13 @@ public abstract class AbstractTestRegexpFunctions
         assertThat(assertions.function("regexp_position", "'有朋$%X自9远方9来'", "'来'", "999"))
                 .isEqualTo(-1);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_position", "'有朋$%X自9远方9来'", "'来'", "-1", "0").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_position", "'有朋$%X自9远方9来'", "'来'", "-1", "0")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_position", "'有朋$%X自9远方9来'", "'来'", "1", "0").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_position", "'有朋$%X自9远方9来'", "'来'", "1", "0")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("regexp_position", "'有朋$%X自9远方9来'", "'来'", "1", "-1").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("regexp_position", "'有朋$%X自9远方9来'", "'来'", "1", "-1")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
         // sql in document

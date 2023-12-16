@@ -15,6 +15,7 @@ package io.trino.plugin.raptor.legacy;
 
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.SetMultimap;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.Inject;
 import io.airlift.bootstrap.LifeCycleManager;
 import io.airlift.log.Logger;
@@ -33,10 +34,8 @@ import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.SystemTable;
 import io.trino.spi.session.PropertyMetadata;
 import io.trino.spi.transaction.IsolationLevel;
+import jakarta.annotation.PostConstruct;
 import org.jdbi.v3.core.Jdbi;
-
-import javax.annotation.PostConstruct;
-import javax.annotation.concurrent.GuardedBy;
 
 import java.util.List;
 import java.util.Optional;

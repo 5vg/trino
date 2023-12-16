@@ -16,8 +16,7 @@ package io.trino.operator.aggregation;
 import io.trino.spi.Page;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.RunLengthEncodedBlock;
-
-import javax.annotation.Nullable;
+import jakarta.annotation.Nullable;
 
 import java.util.Arrays;
 
@@ -43,6 +42,9 @@ public final class AggregationMask
         return new AggregationMask(positionCount);
     }
 
+    /**
+     * Creates a mask with the given selected positions. Selected positions must be sorted in ascending order.
+     */
     public static AggregationMask createSelectedPositions(int positionCount, int[] selectedPositions, int selectedPositionCount)
     {
         return new AggregationMask(positionCount, selectedPositions, selectedPositionCount);

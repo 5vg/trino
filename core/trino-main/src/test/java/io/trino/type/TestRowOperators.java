@@ -36,6 +36,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.parallel.Execution;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -77,9 +78,10 @@ import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.TestInstance.Lifecycle.PER_CLASS;
-import static org.testng.Assert.assertEquals;
+import static org.junit.jupiter.api.parallel.ExecutionMode.CONCURRENT;
 
 @TestInstance(PER_CLASS)
+@Execution(CONCURRENT)
 public class TestRowOperators
 {
     private QueryAssertions assertions;
@@ -114,8 +116,8 @@ public class TestRowOperators
     {
         TypeSignature signature = RowType.from(ImmutableList.of(field("b", BIGINT))).getTypeSignature();
         Type type = ((LocalQueryRunner) assertions.getQueryRunner()).getPlannerContext().getTypeManager().getType(signature);
-        assertEquals(type.getTypeSignature().getParameters().size(), 1);
-        assertEquals(type.getTypeSignature().getParameters().get(0).getNamedTypeSignature().getName().get(), "b");
+        assertThat(type.getTypeSignature().getParameters().size()).isEqualTo(1);
+        assertThat(type.getTypeSignature().getParameters().get(0).getNamedTypeSignature().getName().get()).isEqualTo("b");
     }
 
     @Test
@@ -673,19 +675,19 @@ public class TestRowOperators
         assertComparisonCombination("row(TRUE, FALSE, TRUE, FALSE)", "row(TRUE, TRUE, TRUE, FALSE)");
         assertComparisonCombination("row(1, 2.0E0, TRUE, 'kittens', from_unixtime(1))", "row(1, 3.0E0, TRUE, 'kittens', from_unixtime(1))");
 
-        assertTrinoExceptionThrownBy(() -> assertions.expression("CAST(row(CAST(CAST('' as varbinary) as hyperloglog)) as row(col0 hyperloglog)) = CAST(row(CAST(CAST('' as varbinary) as hyperloglog)) as row(col0 hyperloglog))").evaluate())
+        assertTrinoExceptionThrownBy(assertions.expression("CAST(row(CAST(CAST('' as varbinary) as hyperloglog)) as row(col0 hyperloglog)) = CAST(row(CAST(CAST('' as varbinary) as hyperloglog)) as row(col0 hyperloglog))")::evaluate)
                 .hasErrorCode(TYPE_MISMATCH)
                 .hasMessage("line 1:91: Cannot apply operator: row(col0 HyperLogLog) = row(col0 HyperLogLog)");
 
-        assertTrinoExceptionThrownBy(() -> assertions.expression("CAST(row(CAST(CAST('' as varbinary) as hyperloglog)) as row(col0 hyperloglog)) > CAST(row(CAST(CAST('' as varbinary) as hyperloglog)) as row(col0 hyperloglog))").evaluate())
+        assertTrinoExceptionThrownBy(assertions.expression("CAST(row(CAST(CAST('' as varbinary) as hyperloglog)) as row(col0 hyperloglog)) > CAST(row(CAST(CAST('' as varbinary) as hyperloglog)) as row(col0 hyperloglog))")::evaluate)
                 .hasErrorCode(TYPE_MISMATCH)
                 .hasMessage("line 1:91: Cannot apply operator: row(col0 HyperLogLog) < row(col0 HyperLogLog)");
 
-        assertTrinoExceptionThrownBy(() -> assertions.expression("CAST(row(CAST(CAST('' as varbinary) as qdigest(double))) as row(col0 qdigest(double))) = CAST(row(CAST(CAST('' as varbinary) as qdigest(double))) as row(col0 qdigest(double)))").evaluate())
+        assertTrinoExceptionThrownBy(assertions.expression("CAST(row(CAST(CAST('' as varbinary) as qdigest(double))) as row(col0 qdigest(double))) = CAST(row(CAST(CAST('' as varbinary) as qdigest(double))) as row(col0 qdigest(double)))")::evaluate)
                 .hasErrorCode(TYPE_MISMATCH)
                 .hasMessage("line 1:99: Cannot apply operator: row(col0 qdigest(double)) = row(col0 qdigest(double))");
 
-        assertTrinoExceptionThrownBy(() -> assertions.expression("CAST(row(CAST(CAST('' as varbinary) as qdigest(double))) as row(col0 qdigest(double))) > CAST(row(CAST(CAST('' as varbinary) as qdigest(double))) as row(col0 qdigest(double)))").evaluate())
+        assertTrinoExceptionThrownBy(assertions.expression("CAST(row(CAST(CAST('' as varbinary) as qdigest(double))) as row(col0 qdigest(double))) > CAST(row(CAST(CAST('' as varbinary) as qdigest(double))) as row(col0 qdigest(double)))")::evaluate)
                 .hasErrorCode(TYPE_MISMATCH)
                 .hasMessage("line 1:99: Cannot apply operator: row(col0 qdigest(double)) < row(col0 qdigest(double))");
 
@@ -711,11 +713,11 @@ public class TestRowOperators
                 .binding("b", "row(1, 2)"))
                 .isEqualTo(true);
 
-        assertTrinoExceptionThrownBy(() -> assertions.expression("row(TRUE, ARRAY [1, 2], MAP(ARRAY[1, 3], ARRAY[2.0E0, 4.0E0])) > row(TRUE, ARRAY [1, 2], MAP(ARRAY[1, 3], ARRAY[2.0E0, 4.0E0]))").evaluate())
+        assertTrinoExceptionThrownBy(assertions.expression("row(TRUE, ARRAY [1, 2], MAP(ARRAY[1, 3], ARRAY[2.0E0, 4.0E0])) > row(TRUE, ARRAY [1, 2], MAP(ARRAY[1, 3], ARRAY[2.0E0, 4.0E0]))")::evaluate)
                 .hasErrorCode(TYPE_MISMATCH)
                 .hasMessage("line 1:75: Cannot apply operator: row(boolean, array(integer), map(integer, double)) < row(boolean, array(integer), map(integer, double))");
 
-        assertTrinoExceptionThrownBy(() -> assertions.expression("row(1, CAST(NULL AS INTEGER)) < row(1, 2)").evaluate())
+        assertTrinoExceptionThrownBy(assertions.expression("row(1, CAST(NULL AS INTEGER)) < row(1, 2)")::evaluate)
                 .hasErrorCode(StandardErrorCode.NOT_SUPPORTED);
 
         assertComparisonCombination("row(1.0E0, ARRAY [1,2,3], row(2, 2.0E0))", "row(1.0E0, ARRAY [1,3,3], row(2, 2.0E0))");

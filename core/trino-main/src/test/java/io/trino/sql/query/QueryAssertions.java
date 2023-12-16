@@ -33,6 +33,7 @@ import io.trino.sql.planner.optimizations.PlanNodeSearcher;
 import io.trino.sql.planner.plan.JoinNode;
 import io.trino.sql.planner.plan.PlanNode;
 import io.trino.sql.planner.plan.TableScanNode;
+import io.trino.sql.planner.plan.ValuesNode;
 import io.trino.testing.LocalQueryRunner;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.MaterializedRow;
@@ -58,13 +59,12 @@ import java.util.stream.Collectors;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.testing.Assertions.assertEqualsIgnoreOrder;
 import static io.trino.cost.StatsCalculator.noopStatsCalculator;
-import static io.trino.execution.querystats.PlanOptimizersStatsCollector.createPlanOptimizersStatsCollector;
 import static io.trino.metadata.OperatorNameUtil.mangleOperatorName;
 import static io.trino.sql.planner.assertions.PlanAssert.assertPlan;
 import static io.trino.sql.query.QueryAssertions.QueryAssert.newQueryAssert;
 import static io.trino.testing.TestingHandles.TEST_CATALOG_NAME;
 import static io.trino.testing.TestingSession.testSessionBuilder;
-import static io.trino.transaction.TransactionBuilder.transaction;
+import static io.trino.testing.TransactionBuilder.transaction;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
@@ -352,6 +352,11 @@ public class QueryAssertions
             return matches(expected);
         }
 
+        public QueryAssert succeeds()
+        {
+            return satisfies(actual -> {});
+        }
+
         public QueryAssert ordered()
         {
             ordered = true;
@@ -401,9 +406,9 @@ public class QueryAssertions
         @CanIgnoreReturnValue
         public QueryAssert matches(PlanMatchPattern expectedPlan)
         {
-            transaction(runner.getTransactionManager(), runner.getAccessControl())
+            transaction(runner.getTransactionManager(), runner.getMetadata(), runner.getAccessControl())
                     .execute(session, session -> {
-                        Plan plan = runner.createPlan(session, query, WarningCollector.NOOP, createPlanOptimizersStatsCollector());
+                        Plan plan = runner.createPlan(session, query);
                         assertPlan(
                                 session,
                                 runner.getMetadata(),
@@ -478,9 +483,9 @@ public class QueryAssertions
         {
             checkState(!(runner instanceof LocalQueryRunner), "isFullyPushedDown() currently does not work with LocalQueryRunner");
 
-            transaction(runner.getTransactionManager(), runner.getAccessControl())
+            transaction(runner.getTransactionManager(), runner.getMetadata(), runner.getAccessControl())
                     .execute(session, session -> {
-                        Plan plan = runner.createPlan(session, query, WarningCollector.NOOP, createPlanOptimizersStatsCollector());
+                        Plan plan = runner.createPlan(session, query);
                         assertPlan(
                                 session,
                                 runner.getMetadata(),
@@ -488,6 +493,34 @@ public class QueryAssertions
                                 noopStatsCalculator(),
                                 plan,
                                 PlanMatchPattern.output(PlanMatchPattern.node(TableScanNode.class)));
+                    });
+
+            if (!skipResultsCorrectnessCheckForPushdown) {
+                // Compare the results with pushdown disabled, so that explicit matches() call is not needed
+                hasCorrectResultsRegardlessOfPushdown();
+            }
+            return this;
+        }
+
+        /**
+         * Verifies query is fully pushed down and Table Scan is replaced with empty Values.
+         * Verifies that results are the same as when pushdown is fully disabled.
+         */
+        @CanIgnoreReturnValue
+        public QueryAssert isReplacedWithEmptyValues()
+        {
+            checkState(!(runner instanceof LocalQueryRunner), "isReplacedWithEmptyValues() currently does not work with LocalQueryRunner");
+
+            transaction(runner.getTransactionManager(), runner.getMetadata(), runner.getAccessControl())
+                    .execute(session, session -> {
+                        Plan plan = runner.createPlan(session, query);
+                        assertPlan(
+                                session,
+                                runner.getMetadata(),
+                                runner.getFunctionManager(),
+                                noopStatsCalculator(),
+                                plan,
+                                PlanMatchPattern.output(PlanMatchPattern.node(ValuesNode.class).with(ValuesNode.class, valuesNode -> valuesNode.getRowCount() == 0)));
                     });
 
             if (!skipResultsCorrectnessCheckForPushdown) {
@@ -563,9 +596,9 @@ public class QueryAssertions
 
         private QueryAssert hasPlan(PlanMatchPattern expectedPlan, Consumer<Plan> additionalPlanVerification)
         {
-            transaction(runner.getTransactionManager(), runner.getAccessControl())
+            transaction(runner.getTransactionManager(), runner.getMetadata(), runner.getAccessControl())
                     .execute(session, session -> {
-                        Plan plan = runner.createPlan(session, query, WarningCollector.NOOP, createPlanOptimizersStatsCollector());
+                        Plan plan = runner.createPlan(session, query);
                         assertPlan(
                                 session,
                                 runner.getMetadata(),
@@ -585,9 +618,9 @@ public class QueryAssertions
 
         private QueryAssert verifyPlan(Consumer<Plan> planVerification)
         {
-            transaction(runner.getTransactionManager(), runner.getAccessControl())
+            transaction(runner.getTransactionManager(), runner.getMetadata(), runner.getAccessControl())
                     .execute(session, session -> {
-                        Plan plan = runner.createPlan(session, query, WarningCollector.NOOP, createPlanOptimizersStatsCollector());
+                        Plan plan = runner.createPlan(session, query);
                         planVerification.accept(plan);
                     });
 
@@ -639,54 +672,53 @@ public class QueryAssertions
             if (bindings.isEmpty()) {
                 return run("VALUES ROW(%s)".formatted(expression));
             }
-            else {
-                List<Map.Entry<String, String>> entries = ImmutableList.copyOf(bindings.entrySet());
 
-                List<String> columns = entries.stream()
-                        .map(Map.Entry::getKey)
-                        .collect(toList());
+            List<Map.Entry<String, String>> entries = ImmutableList.copyOf(bindings.entrySet());
 
-                List<String> values = entries.stream()
-                        .map(Map.Entry::getValue)
-                        .collect(toList());
+            List<String> columns = entries.stream()
+                    .map(Map.Entry::getKey)
+                    .collect(toList());
 
-                // Evaluate the expression using two modes:
-                //  1. Avoid constant folding -> exercises the compiler and evaluation engine
-                //  2. Force constant folding -> exercises the interpreter
+            List<String> values = entries.stream()
+                    .map(Map.Entry::getValue)
+                    .collect(toList());
 
-                Result full = run("""
-                        SELECT %s
-                        FROM (
-                            VALUES ROW(%s)
-                        ) t(%s)
-                        WHERE rand() >= 0
-                        """
-                        .formatted(
-                                expression,
-                                Joiner.on(",").join(values),
-                                Joiner.on(",").join(columns)));
+            // Evaluate the expression using two modes:
+            //  1. Avoid constant folding -> exercises the compiler and evaluation engine
+            //  2. Force constant folding -> exercises the interpreter
 
-                Result withConstantFolding = run("""
-                        SELECT %s
-                        FROM (
-                            VALUES ROW(%s)
-                        ) t(%s)
-                        """
-                        .formatted(
-                                expression,
-                                Joiner.on(",").join(values),
-                                Joiner.on(",").join(columns)));
+            Result full = run("""
+                    SELECT %s
+                    FROM (
+                        VALUES ROW(%s)
+                    ) t(%s)
+                    WHERE rand() >= 0
+                    """
+                    .formatted(
+                            expression,
+                            Joiner.on(",").join(values),
+                            Joiner.on(",").join(columns)));
 
-                if (!full.type().equals(withConstantFolding.type())) {
-                    fail("Mismatched types between interpreter and evaluation engine: %s vs %s".formatted(full.type(), withConstantFolding.type()));
-                }
+            Result withConstantFolding = run("""
+                    SELECT %s
+                    FROM (
+                        VALUES ROW(%s)
+                    ) t(%s)
+                    """
+                    .formatted(
+                            expression,
+                            Joiner.on(",").join(values),
+                            Joiner.on(",").join(columns)));
 
-                if (!Objects.equals(full.value(), withConstantFolding.value())) {
-                    fail("Mismatched results between interpreter and evaluation engine: %s vs %s".formatted(full.value(), withConstantFolding.value()));
-                }
-
-                return new Result(full.type(), full.value);
+            if (!full.type().equals(withConstantFolding.type())) {
+                fail("Mismatched types between interpreter and evaluation engine: %s vs %s".formatted(full.type(), withConstantFolding.type()));
             }
+
+            if (!Objects.equals(full.value(), withConstantFolding.value())) {
+                fail("Mismatched results between interpreter and evaluation engine: %s vs %s".formatted(full.value(), withConstantFolding.value()));
+            }
+
+            return new Result(full.type(), full.value);
         }
 
         private Result run(String query)
@@ -703,7 +735,7 @@ public class QueryAssertions
                     .withRepresentation(ExpressionAssert.TYPE_RENDERER);
         }
 
-        record Result(Type type, Object value) {}
+        public record Result(Type type, Object value) {}
     }
 
     public static class ExpressionAssert

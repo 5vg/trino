@@ -24,8 +24,7 @@ import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.block.RunLengthEncodedBlock;
 import io.trino.spi.security.ConnectorIdentity;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
-import org.testng.annotations.BeforeClass;
-import org.testng.annotations.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.OptionalInt;
 import java.util.OptionalLong;
@@ -38,24 +37,25 @@ import static io.trino.plugin.hive.HiveTestUtils.SESSION;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.testing.MaterializedResult.resultBuilder;
-import static org.testng.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestOrcDeletedRows
 {
-    private Location partitionDirectory;
-    private Block rowIdBlock;
-    private Block bucketBlock;
+    private final Location partitionDirectory;
+    private final Block rowIdBlock;
+    private final Block bucketBlock;
 
-    @BeforeClass
-    public void setUp()
+    public TestOrcDeletedRows()
     {
         partitionDirectory = Location.of(getResource("fullacid_delete_delta_test").toString());
-        rowIdBlock = BIGINT.createFixedSizeBlockBuilder(1)
-                .writeLong(0)
-                .build();
-        bucketBlock = INTEGER.createFixedSizeBlockBuilder(1)
-                .writeInt(536870912)
-                .build();
+
+        BlockBuilder rowIdBlockBuilder = BIGINT.createFixedSizeBlockBuilder(1);
+        BIGINT.writeLong(rowIdBlockBuilder, 0);
+        rowIdBlock = rowIdBlockBuilder.build();
+
+        BlockBuilder bucketBlockBuilder = INTEGER.createFixedSizeBlockBuilder(1);
+        INTEGER.writeInt(bucketBlockBuilder, 536870912);
+        bucketBlock = bucketBlockBuilder.build();
     }
 
     @Test
@@ -75,13 +75,13 @@ public class TestOrcDeletedRows
                 .build()
                 .getOnlyColumnAsSet();
 
-        assertEquals(validRows.size(), 8);
-        assertEquals(validRows, ImmutableSet.of(0L, 1L, 3L, 4L, 5L, 7L, 8L, 9L));
+        assertThat(validRows.size()).isEqualTo(8);
+        assertThat(validRows).isEqualTo(ImmutableSet.of(0L, 1L, 3L, 4L, 5L, 7L, 8L, 9L));
 
         // page with no deleted rows
         testPage = createTestPage(10, 20);
         block = deletedRows.getMaskDeletedRowsFunction(testPage, OptionalLong.empty()).apply(testPage.getBlock(1));
-        assertEquals(block.getPositionCount(), 10);
+        assertThat(block.getPositionCount()).isEqualTo(10);
     }
 
     @Test
@@ -104,13 +104,13 @@ public class TestOrcDeletedRows
                 .build()
                 .getOnlyColumnAsSet();
 
-        assertEquals(validRows.size(), 7);
-        assertEquals(validRows, ImmutableSet.of(0L, 1L, 3L, 4L, 5L, 6L, 7L));
+        assertThat(validRows.size()).isEqualTo(7);
+        assertThat(validRows).isEqualTo(ImmutableSet.of(0L, 1L, 3L, 4L, 5L, 6L, 7L));
 
         // page with no deleted rows
         testPage = createTestPage(5, 9);
         block = deletedRows.getMaskDeletedRowsFunction(testPage, OptionalLong.empty()).apply(testPage.getBlock(1));
-        assertEquals(block.getPositionCount(), 4);
+        assertThat(block.getPositionCount()).isEqualTo(4);
     }
 
     @Test
@@ -129,13 +129,13 @@ public class TestOrcDeletedRows
                 .build()
                 .getOnlyColumnAsSet();
 
-        assertEquals(validRows.size(), 9);
-        assertEquals(validRows, ImmutableSet.of(0L, 1L, 3L, 4L, 5L, 6L, 7L, 8L, 9L));
+        assertThat(validRows.size()).isEqualTo(9);
+        assertThat(validRows).isEqualTo(ImmutableSet.of(0L, 1L, 3L, 4L, 5L, 6L, 7L, 8L, 9L));
 
         // page with no deleted rows
         testPage = createTestPage(10, 20);
         block = deletedRows.getMaskDeletedRowsFunction(testPage, OptionalLong.empty()).apply(testPage.getBlock(1));
-        assertEquals(block.getPositionCount(), 10);
+        assertThat(block.getPositionCount()).isEqualTo(10);
     }
 
     private static void addDeleteDelta(AcidInfo.Builder acidInfoBuilder, long minWriteId, long maxWriteId, OptionalInt statementId, Location path)
@@ -175,7 +175,7 @@ public class TestOrcDeletedRows
         int size = originalTransactionEnd - originalTransactionStart;
         BlockBuilder originalTransaction = BIGINT.createFixedSizeBlockBuilder(size);
         for (long i = originalTransactionStart; i < originalTransactionEnd; i++) {
-            originalTransaction.writeLong(i);
+            BIGINT.writeLong(originalTransaction, i);
         }
 
         return new Page(

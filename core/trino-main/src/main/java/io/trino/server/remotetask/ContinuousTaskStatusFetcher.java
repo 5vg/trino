@@ -15,6 +15,7 @@ package io.trino.server.remotetask;
 
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import io.airlift.concurrent.SetThreadName;
 import io.airlift.http.client.FullJsonResponseHandler;
 import io.airlift.http.client.HttpClient;
@@ -28,8 +29,6 @@ import io.trino.execution.TaskId;
 import io.trino.execution.TaskStatus;
 import io.trino.spi.HostAddress;
 import io.trino.spi.TrinoException;
-
-import javax.annotation.concurrent.GuardedBy;
 
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
@@ -179,6 +178,7 @@ class ContinuousTaskStatusFetcher
                     errorTracker.requestSucceeded();
                 }
                 finally {
+                    cleanupRequest();
                     scheduleNextRequest();
                 }
             }
@@ -204,6 +204,7 @@ class ContinuousTaskStatusFetcher
                     onFail.accept(e);
                 }
                 finally {
+                    cleanupRequest();
                     scheduleNextRequest();
                 }
             }
@@ -216,6 +217,14 @@ class ContinuousTaskStatusFetcher
                 updateStats(requestStartNanos);
                 onFail.accept(cause);
             }
+        }
+    }
+
+    private synchronized void cleanupRequest()
+    {
+        if (future != null && future.isDone()) {
+            // remove outstanding reference to JSON response
+            future = null;
         }
     }
 

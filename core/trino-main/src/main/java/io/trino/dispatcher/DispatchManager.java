@@ -41,11 +41,10 @@ import io.trino.spi.QueryId;
 import io.trino.spi.TrinoException;
 import io.trino.spi.resourcegroups.SelectionContext;
 import io.trino.spi.resourcegroups.SelectionCriteria;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.weakref.jmx.Flatten;
 import org.weakref.jmx.Managed;
-
-import javax.annotation.PostConstruct;
-import javax.annotation.PreDestroy;
 
 import java.util.List;
 import java.util.Optional;
@@ -230,6 +229,7 @@ public class DispatchManager
                 session = Session.builder(sessionPropertyManager)
                         .setQueryId(queryId)
                         .setIdentity(sessionContext.getIdentity())
+                        .setOriginalIdentity(sessionContext.getOriginalIdentity())
                         .setSource(sessionContext.getSource().orElse(null))
                         .build();
             }
@@ -287,6 +287,14 @@ public class DispatchManager
 
     @Managed
     public long getRunningQueries()
+    {
+        return queryTracker.getAllQueries().stream()
+                .filter(query -> query.getState() == RUNNING)
+                .count();
+    }
+
+    @Managed
+    public long getProgressingQueries()
     {
         return queryTracker.getAllQueries().stream()
                 .filter(query -> query.getState() == RUNNING && !query.getBasicQueryInfo().getQueryStats().isFullyBlocked())

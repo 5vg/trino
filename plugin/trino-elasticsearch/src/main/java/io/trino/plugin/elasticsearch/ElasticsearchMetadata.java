@@ -59,9 +59,9 @@ import io.trino.spi.expression.Call;
 import io.trino.spi.expression.ConnectorExpression;
 import io.trino.spi.expression.Constant;
 import io.trino.spi.expression.Variable;
+import io.trino.spi.function.table.ConnectorTableFunctionHandle;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
-import io.trino.spi.ptf.ConnectorTableFunctionHandle;
 import io.trino.spi.type.ArrayType;
 import io.trino.spi.type.RowType;
 import io.trino.spi.type.StandardTypes;
@@ -86,6 +86,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterators.singletonIterator;
 import static io.airlift.slice.SliceUtf8.getCodePointAt;
+import static io.airlift.slice.SliceUtf8.lengthOfCodePoint;
 import static io.trino.plugin.elasticsearch.ElasticsearchTableHandle.Type.QUERY;
 import static io.trino.plugin.elasticsearch.ElasticsearchTableHandle.Type.SCAN;
 import static io.trino.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
@@ -528,7 +529,7 @@ public class ElasticsearchMetadata
                     Object pattern = ((Constant) arguments.get(1)).getValue();
                     Optional<Slice> escape = Optional.empty();
                     if (arguments.size() == 3) {
-                        escape = Optional.of((Slice) (((Constant) arguments.get(2)).getValue()));
+                        escape = Optional.of((Slice) ((Constant) arguments.get(2)).getValue());
                     }
 
                     if (!newRegexes.containsKey(columnName) && pattern instanceof Slice) {
@@ -536,7 +537,7 @@ public class ElasticsearchMetadata
                         if (metadata.getSchema()
                                     .getFields().stream()
                                     .anyMatch(field -> columnName.equals(field.getName()) && field.getType() instanceof PrimitiveType && "keyword".equals(((PrimitiveType) field.getType()).getName()))) {
-                            newRegexes.put(columnName, likeToRegexp(((Slice) pattern), escape));
+                            newRegexes.put(columnName, likeToRegexp((Slice) pattern, escape));
                             continue;
                         }
                     }
@@ -592,7 +593,7 @@ public class ElasticsearchMetadata
         int position = 0;
         while (position < pattern.length()) {
             int currentChar = getCodePointAt(pattern, position);
-            position += 1;
+            position += lengthOfCodePoint(currentChar);
             checkEscape(!escaped || currentChar == '%' || currentChar == '_' || currentChar == escapeChar.get());
             if (!escaped && escapeChar.isPresent() && currentChar == escapeChar.get()) {
                 escaped = true;

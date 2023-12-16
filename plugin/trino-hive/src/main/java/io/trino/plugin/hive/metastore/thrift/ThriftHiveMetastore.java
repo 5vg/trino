@@ -14,14 +14,17 @@
 package io.trino.plugin.hive.metastore.thrift;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.CharMatcher;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.errorprone.annotations.ThreadSafe;
 import io.airlift.concurrent.MoreFutures;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
-import io.trino.hdfs.HdfsContext;
-import io.trino.hdfs.HdfsEnvironment;
+import io.trino.filesystem.Location;
+import io.trino.filesystem.TrinoFileSystem;
+import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.hive.thrift.metastore.AlreadyExistsException;
 import io.trino.hive.thrift.metastore.ColumnStatisticsObj;
 import io.trino.hive.thrift.metastore.ConfigValSecurityException;
@@ -79,21 +82,22 @@ import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.ConnectorIdentity;
 import io.trino.spi.security.RoleGrant;
 import io.trino.spi.type.Type;
-import org.apache.hadoop.fs.Path;
 import org.apache.thrift.TException;
-
-import javax.annotation.concurrent.ThreadSafe;
+import org.apache.thrift.transport.TTransportException;
 
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.AbstractMap.SimpleEntry;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -104,6 +108,7 @@ import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
@@ -131,6 +136,7 @@ import static io.trino.plugin.hive.metastore.thrift.ThriftMetastoreUtil.toMetast
 import static io.trino.plugin.hive.metastore.thrift.ThriftMetastoreUtil.updateStatisticsParameters;
 import static io.trino.plugin.hive.util.HiveUtil.makePartName;
 import static io.trino.spi.StandardErrorCode.ALREADY_EXISTS;
+import static io.trino.spi.StandardErrorCode.GENERIC_USER_ERROR;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.security.PrincipalType.USER;
 import static java.lang.String.format;
@@ -138,15 +144,16 @@ import static java.lang.System.nanoTime;
 import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
-public class ThriftHiveMetastore
+public final class ThriftHiveMetastore
         implements ThriftMetastore
 {
     private static final Logger log = Logger.get(ThriftHiveMetastore.class);
 
     private static final String DEFAULT_METASTORE_USER = "presto";
+    private static final CharMatcher DOT_MATCHER = CharMatcher.is('.');
 
     private final Optional<ConnectorIdentity> identity;
-    private final HdfsEnvironment hdfsEnvironment;
+    private final TrinoFileSystemFactory fileSystemFactory;
     private final IdentityAwareMetastoreClientFactory metastoreClientFactory;
     private final double backoffScaleFactor;
     private final Duration minBackoffDelay;
@@ -158,12 +165,13 @@ public class ThriftHiveMetastore
     private final boolean translateHiveViews;
     private final boolean assumeCanonicalPartitionKeys;
     private final boolean useSparkTableStatisticsFallback;
+    private final boolean batchMetadataFetchEnabled;
     private final ThriftMetastoreStats stats;
     private final ExecutorService writeStatisticsExecutor;
 
     public ThriftHiveMetastore(
             Optional<ConnectorIdentity> identity,
-            HdfsEnvironment hdfsEnvironment,
+            TrinoFileSystemFactory fileSystemFactory,
             IdentityAwareMetastoreClientFactory metastoreClientFactory,
             double backoffScaleFactor,
             Duration minBackoffDelay,
@@ -175,11 +183,12 @@ public class ThriftHiveMetastore
             boolean translateHiveViews,
             boolean assumeCanonicalPartitionKeys,
             boolean useSparkTableStatisticsFallback,
+            boolean batchMetadataFetchEnabled,
             ThriftMetastoreStats stats,
             ExecutorService writeStatisticsExecutor)
     {
         this.identity = requireNonNull(identity, "identity is null");
-        this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
+        this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
         this.metastoreClientFactory = requireNonNull(metastoreClientFactory, "metastoreClientFactory is null");
         this.backoffScaleFactor = backoffScaleFactor;
         this.minBackoffDelay = requireNonNull(minBackoffDelay, "minBackoffDelay is null");
@@ -191,6 +200,7 @@ public class ThriftHiveMetastore
         this.translateHiveViews = translateHiveViews;
         this.assumeCanonicalPartitionKeys = assumeCanonicalPartitionKeys;
         this.useSparkTableStatisticsFallback = useSparkTableStatisticsFallback;
+        this.batchMetadataFetchEnabled = batchMetadataFetchEnabled;
         this.stats = requireNonNull(stats, "stats is null");
         this.writeStatisticsExecutor = requireNonNull(writeStatisticsExecutor, "writeStatisticsExecutor is null");
     }
@@ -356,7 +366,7 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (NoSuchObjectException e) {
-            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
+            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName), e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -387,6 +397,22 @@ public class ThriftHiveMetastore
                         }));
         Map<String, OptionalLong> partitionRowCounts = partitionBasicStatistics.entrySet().stream()
                 .collect(toImmutableMap(Map.Entry::getKey, entry -> entry.getValue().getRowCount()));
+
+        long tableRowCount = partitionRowCounts.values().stream()
+                .mapToLong(count -> count.orElse(0))
+                .sum();
+        if (!partitionRowCounts.isEmpty() && tableRowCount == 0) {
+            // When the table has partitions, but row count statistics are set to zero, we treat this case as empty
+            // statistics to avoid underestimation in the CBO. This scenario may be caused when other engines are
+            // used to ingest data into partitioned hive tables.
+            // https://github.com/trinodb/trino/issues/18798 Hive Metastore assumes any new partition statistics to at least have all parameters that the partition used to have
+            partitionBasicStatistics = partitionBasicStatistics.entrySet().stream()
+                    .map(entry -> new SimpleEntry<>(
+                            entry.getKey(),
+                            entry.getValue().withEmptyRowCount()))
+                    .collect(toImmutableMap(SimpleEntry::getKey, SimpleEntry::getValue));
+        }
+
         Map<String, Map<String, HiveColumnStatistics>> partitionColumnStatistics = getPartitionColumnStatistics(
                 table.getDbName(),
                 table.getTableName(),
@@ -454,7 +480,7 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (NoSuchObjectException e) {
-            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
+            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName), e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -535,7 +561,7 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (NoSuchObjectException e) {
-            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
+            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName), e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -559,7 +585,7 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (NoSuchObjectException e) {
-            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
+            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName), e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -573,6 +599,9 @@ public class ThriftHiveMetastore
     public void updatePartitionStatistics(Table table, String partitionName, Function<PartitionStatistics, PartitionStatistics> update)
     {
         List<Partition> partitions = getPartitionsByNames(table.getDbName(), table.getTableName(), ImmutableList.of(partitionName));
+        if (partitions.isEmpty()) {
+            throw new TrinoException(HIVE_METASTORE_ERROR, "No partition found for name: " + partitionName);
+        }
         if (partitions.size() != 1) {
             throw new TrinoException(HIVE_METASTORE_ERROR, "Metastore returned multiple partitions for name: " + partitionName);
         }
@@ -626,7 +655,7 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (NoSuchObjectException e) {
-            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
+            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName), e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -650,7 +679,7 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (NoSuchObjectException e) {
-            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
+            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName), e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -795,27 +824,6 @@ public class ThriftHiveMetastore
     }
 
     @Override
-    public Set<RoleGrant> listGrantedPrincipals(String role)
-    {
-        try {
-            return retry()
-                    .stopOn(MetaException.class)
-                    .stopOnIllegalExceptions()
-                    .run("listPrincipals", stats.getListGrantedPrincipals().wrap(() -> {
-                        try (ThriftMetastoreClient client = createMetastoreClient()) {
-                            return fromRolePrincipalGrants(client.listGrantedPrincipals(role));
-                        }
-                    }));
-        }
-        catch (TException e) {
-            throw new TrinoException(HIVE_METASTORE_ERROR, e);
-        }
-        catch (Exception e) {
-            throw propagate(e);
-        }
-    }
-
-    @Override
     public Set<RoleGrant> listRoleGrants(HivePrincipal principal)
     {
         try {
@@ -866,6 +874,10 @@ public class ThriftHiveMetastore
     @Override
     public Optional<List<SchemaTableName>> getAllTables()
     {
+        if (!batchMetadataFetchEnabled) {
+            return Optional.empty();
+        }
+
         try {
             return retry()
                     .stopOn(UnknownDBException.class)
@@ -875,6 +887,11 @@ public class ThriftHiveMetastore
                             return client.getAllTables();
                         }
                     }));
+        }
+        catch (TTransportException e) {
+            log.warn(e, "Failed to get all views");
+            // fallback in case of HMS error
+            return Optional.empty();
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -893,6 +910,10 @@ public class ThriftHiveMetastore
             return Optional.empty();
         }
 
+        if (!batchMetadataFetchEnabled) {
+            return Optional.empty();
+        }
+
         try {
             return retry()
                     .stopOn(UnknownDBException.class)
@@ -902,6 +923,11 @@ public class ThriftHiveMetastore
                             return client.getAllViews();
                         }
                     }));
+        }
+        catch (TTransportException e) {
+            log.warn(e, "Failed to get all tables");
+            // fallback in case of HMS error
+            return Optional.empty();
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -914,6 +940,7 @@ public class ThriftHiveMetastore
     @Override
     public void createDatabase(Database database)
     {
+        validateObjectName(database.getName());
         try {
             retry()
                     .stopOn(AlreadyExistsException.class, InvalidObjectException.class, MetaException.class)
@@ -926,7 +953,7 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (AlreadyExistsException e) {
-            throw new SchemaAlreadyExistsException(database.getName());
+            throw new SchemaAlreadyExistsException(database.getName(), e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -951,7 +978,7 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (NoSuchObjectException e) {
-            throw new SchemaNotFoundException(databaseName);
+            throw new SchemaNotFoundException(databaseName, e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -964,6 +991,9 @@ public class ThriftHiveMetastore
     @Override
     public void alterDatabase(String databaseName, Database database)
     {
+        if (!Objects.equals(databaseName, database.getName())) {
+            validateObjectName(database.getName());
+        }
         try {
             retry()
                     .stopOn(NoSuchObjectException.class, MetaException.class)
@@ -976,7 +1006,7 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (NoSuchObjectException e) {
-            throw new SchemaNotFoundException(databaseName);
+            throw new SchemaNotFoundException(databaseName, e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -989,6 +1019,7 @@ public class ThriftHiveMetastore
     @Override
     public void createTable(Table table)
     {
+        validateObjectName(table.getTableName());
         try {
             retry()
                     .stopOn(AlreadyExistsException.class, InvalidObjectException.class, MetaException.class, NoSuchObjectException.class)
@@ -1001,10 +1032,10 @@ public class ThriftHiveMetastore
                     }));
         }
         catch (AlreadyExistsException e) {
-            throw new TableAlreadyExistsException(new SchemaTableName(table.getDbName(), table.getTableName()));
+            throw new TableAlreadyExistsException(new SchemaTableName(table.getDbName(), table.getTableName()), e);
         }
         catch (NoSuchObjectException e) {
-            throw new SchemaNotFoundException(table.getDbName());
+            throw new SchemaNotFoundException(table.getDbName(), e);
         }
         catch (InvalidObjectException e) {
             boolean databaseMissing;
@@ -1016,7 +1047,7 @@ public class ThriftHiveMetastore
                 databaseMissing = false; // we don't know, assume it exists for the purpose of error reporting
             }
             if (databaseMissing) {
-                throw new SchemaNotFoundException(table.getDbName());
+                throw new SchemaNotFoundException(table.getDbName(), e);
             }
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
         }
@@ -1041,14 +1072,14 @@ public class ThriftHiveMetastore
                             client.dropTable(databaseName, tableName, deleteData);
                             String tableLocation = table.getSd().getLocation();
                             if (deleteFilesOnDrop && deleteData && isManagedTable(table) && !isNullOrEmpty(tableLocation)) {
-                                deleteDirRecursive(new Path(tableLocation));
+                                deleteDirRecursive(Location.of(tableLocation));
                             }
                         }
                         return null;
                     }));
         }
         catch (NoSuchObjectException e) {
-            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
+            throw new TableNotFoundException(new SchemaTableName(databaseName, tableName), e);
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -1058,12 +1089,12 @@ public class ThriftHiveMetastore
         }
     }
 
-    private void deleteDirRecursive(Path path)
+    private void deleteDirRecursive(Location path)
     {
         try {
-            HdfsContext context = new HdfsContext(identity.orElseGet(() ->
-                    ConnectorIdentity.ofUser(DEFAULT_METASTORE_USER)));
-            hdfsEnvironment.getFileSystem(context, path).delete(path, true);
+            TrinoFileSystem fileSystem = fileSystemFactory.create(
+                    identity.orElseGet(() -> ConnectorIdentity.ofUser(DEFAULT_METASTORE_USER)));
+            fileSystem.deleteDirectory(path);
         }
         catch (IOException | RuntimeException e) {
             // don't fail if unable to delete path
@@ -1079,6 +1110,12 @@ public class ThriftHiveMetastore
     @Override
     public void alterTable(String databaseName, String tableName, Table table)
     {
+        if (!Objects.equals(databaseName, table.getDbName())) {
+            validateObjectName(table.getDbName());
+        }
+        if (!Objects.equals(tableName, table.getTableName())) {
+            validateObjectName(table.getTableName());
+        }
         try {
             retry()
                     .stopOn(InvalidOperationException.class, MetaException.class)
@@ -1253,7 +1290,7 @@ public class ThriftHiveMetastore
                             client.dropPartition(databaseName, tableName, parts, deleteData);
                             String partitionLocation = partition.getSd().getLocation();
                             if (deleteFilesOnDrop && deleteData && !isNullOrEmpty(partitionLocation) && isManagedTable(client.getTable(databaseName, tableName))) {
-                                deleteDirRecursive(new Path(partitionLocation));
+                                deleteDirRecursive(Location.of(partitionLocation));
                             }
                         }
                         return null;
@@ -1430,7 +1467,7 @@ public class ThriftHiveMetastore
                                 HivePrivilegeInfo requestedPrivilege = getOnlyElement(parsePrivilege(iterator.next(), Optional.empty()));
 
                                 for (HivePrivilegeInfo existingPrivilege : existingPrivileges) {
-                                    if ((requestedPrivilege.isContainedIn(existingPrivilege))) {
+                                    if (requestedPrivilege.isContainedIn(existingPrivilege)) {
                                         iterator.remove();
                                     }
                                     else if (existingPrivilege.isContainedIn(requestedPrivilege)) {
@@ -1613,12 +1650,12 @@ public class ThriftHiveMetastore
         try {
             retry()
                     .stopOnIllegalExceptions()
-                    .run("sendTransactionHeartbeat", (() -> {
+                    .run("sendTransactionHeartbeat", () -> {
                         try (ThriftMetastoreClient metastoreClient = createMetastoreClient()) {
                             metastoreClient.sendTransactionHeartbeat(transactionId);
                         }
                         return null;
-                    }));
+                    });
         }
         catch (TException e) {
             throw new TrinoException(HIVE_METASTORE_ERROR, e);
@@ -1918,28 +1955,6 @@ public class ThriftHiveMetastore
     }
 
     @Override
-    public void alterPartitions(String dbName, String tableName, List<Partition> partitions, long writeId)
-    {
-        checkArgument(writeId > 0, "writeId should be a positive integer, but was %s", writeId);
-        try {
-            retry()
-                    .stopOnIllegalExceptions()
-                    .run("alterPartitions", stats.getAlterPartitions().wrap(() -> {
-                        try (ThriftMetastoreClient metastoreClient = createMetastoreClient()) {
-                            metastoreClient.alterPartitions(dbName, tableName, partitions, writeId);
-                        }
-                        return null;
-                    }));
-        }
-        catch (TException e) {
-            throw new TrinoException(HIVE_METASTORE_ERROR, e);
-        }
-        catch (Exception e) {
-            throw propagate(e);
-        }
-    }
-
-    @Override
     public void addDynamicPartitions(String dbName, String tableName, List<String> partitionNames, long transactionId, long writeId, AcidOperation operation)
     {
         checkArgument(writeId > 0, "writeId should be a positive integer, but was %s", writeId);
@@ -1953,6 +1968,123 @@ public class ThriftHiveMetastore
                             metastoreClient.addDynamicPartitions(dbName, tableName, partitionNames, transactionId, writeId, operation);
                         }
                         return null;
+                    }));
+        }
+        catch (TException e) {
+            throw new TrinoException(HIVE_METASTORE_ERROR, e);
+        }
+        catch (Exception e) {
+            throw propagate(e);
+        }
+    }
+
+    @Override
+    public Optional<io.trino.hive.thrift.metastore.Function> getFunction(String databaseName, String functionName)
+    {
+        try {
+            return retry()
+                    .stopOn(MetaException.class, NoSuchObjectException.class)
+                    .stopOnIllegalExceptions()
+                    .run("getFunction", stats.getGetFunction().wrap(() -> {
+                        try (ThriftMetastoreClient client = createMetastoreClient()) {
+                            return Optional.of(client.getFunction(databaseName, functionName));
+                        }
+                    }));
+        }
+        catch (NoSuchObjectException e) {
+            return Optional.empty();
+        }
+        catch (TException e) {
+            // Hive 2.x throws the wrong exception type
+            if ((e instanceof MetaException) && nullToEmpty(e.getMessage()).startsWith("NoSuchObjectException(")) {
+                return Optional.empty();
+            }
+            throw new TrinoException(HIVE_METASTORE_ERROR, e);
+        }
+        catch (Exception e) {
+            throw propagate(e);
+        }
+    }
+
+    @Override
+    public Collection<String> getFunctions(String databaseName, String functionNamePattern)
+    {
+        try {
+            return retry()
+                    .stopOnIllegalExceptions()
+                    .run("getFunctions", stats.getGetFunctions().wrap(() -> {
+                        try (ThriftMetastoreClient client = createMetastoreClient()) {
+                            return client.getFunctions(databaseName, functionNamePattern);
+                        }
+                    }));
+        }
+        catch (TException e) {
+            throw new TrinoException(HIVE_METASTORE_ERROR, e);
+        }
+        catch (Exception e) {
+            throw propagate(e);
+        }
+    }
+
+    @Override
+    public void createFunction(io.trino.hive.thrift.metastore.Function function)
+    {
+        try {
+            retry()
+                    .stopOn(AlreadyExistsException.class, InvalidObjectException.class, NoSuchObjectException.class)
+                    .stopOnIllegalExceptions()
+                    .run("createFunction", stats.getCreateFunction().wrap(() -> {
+                        try (ThriftMetastoreClient client = createMetastoreClient()) {
+                            client.createFunction(function);
+                            return null;
+                        }
+                    }));
+        }
+        catch (NoSuchObjectException e) {
+            throw new SchemaNotFoundException(function.getDbName());
+        }
+        catch (TException e) {
+            throw new TrinoException(HIVE_METASTORE_ERROR, e);
+        }
+        catch (Exception e) {
+            throw propagate(e);
+        }
+    }
+
+    @Override
+    public void alterFunction(io.trino.hive.thrift.metastore.Function function)
+    {
+        try {
+            retry()
+                    .stopOn(InvalidOperationException.class)
+                    .stopOnIllegalExceptions()
+                    .run("alterFunction", stats.getAlterFunction().wrap(() -> {
+                        try (ThriftMetastoreClient client = createMetastoreClient()) {
+                            client.alterFunction(function);
+                            return null;
+                        }
+                    }));
+        }
+        catch (TException e) {
+            throw new TrinoException(HIVE_METASTORE_ERROR, e);
+        }
+        catch (Exception e) {
+            throw propagate(e);
+        }
+    }
+
+    @Override
+    public void dropFunction(String databaseName, String functionName)
+    {
+        try {
+            retry()
+                    .stopOn(NoSuchObjectException.class)
+                    .stopOnIllegalExceptions()
+                    .run("dropFunction", stats.getDropFunction().wrap(() -> {
+                        try (ThriftMetastoreClient client = createMetastoreClient()) {
+                            client.dropFunction(databaseName, functionName);
+                            return null;
+                        }
                     }));
         }
         catch (TException e) {
@@ -2009,5 +2141,21 @@ public class ThriftHiveMetastore
         }
         throwIfUnchecked(throwable);
         throw new RuntimeException(throwable);
+    }
+
+    private static void validateObjectName(String objectName)
+    {
+        if (isNullOrEmpty(objectName)) {
+            throw new IllegalArgumentException("The provided objectName cannot be null or empty");
+        }
+        if (DOT_MATCHER.matchesAllOf(objectName)) {
+            // '.' or '..' object names can cause the object to have an inaccurate location on the object storage
+            throw new TrinoException(GENERIC_USER_ERROR, format("Invalid object name: '%s'", objectName));
+        }
+        if (objectName.contains("/")) {
+            // Older HMS instances may allow names like 'foo/bar' which can cause managed tables to be
+            // saved in a different location than its intended schema directory
+            throw new TrinoException(GENERIC_USER_ERROR, format("Invalid object name: '%s'", objectName));
+        }
     }
 }

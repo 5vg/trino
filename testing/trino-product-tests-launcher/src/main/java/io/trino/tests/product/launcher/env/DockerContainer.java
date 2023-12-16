@@ -20,6 +20,7 @@ import com.google.common.base.Splitter;
 import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.RecursiveDeleteOption;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import dev.failsafe.Failsafe;
 import dev.failsafe.FailsafeExecutor;
 import dev.failsafe.Timeout;
@@ -35,8 +36,6 @@ import org.testcontainers.containers.wait.strategy.WaitStrategy;
 import org.testcontainers.images.ImagePullPolicy;
 import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.DockerImageName;
-
-import javax.annotation.concurrent.GuardedBy;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -88,8 +87,8 @@ public class DockerContainer
     @GuardedBy("this")
     private OptionalLong lastStartFinishTimeNanos = OptionalLong.empty();
 
-    private List<String> logPaths = new ArrayList<>();
-    private List<ContainerListener> listeners = new ArrayList<>();
+    private final List<String> logPaths = new ArrayList<>();
+    private final List<ContainerListener> listeners = new ArrayList<>();
     private boolean temporary;
     private static final ImagePullPolicy pullPolicy = new ConditionalPullPolicy();
 

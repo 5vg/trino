@@ -13,6 +13,7 @@
  */
 package io.trino.filesystem.hdfs;
 
+import com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem;
 import io.airlift.stats.TimeStat;
 import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoOutputFile;
@@ -20,14 +21,20 @@ import io.trino.hdfs.CallStats;
 import io.trino.hdfs.HdfsContext;
 import io.trino.hdfs.HdfsEnvironment;
 import io.trino.hdfs.MemoryAwareFileSystem;
+import io.trino.hdfs.authentication.GenericExceptionAction;
+import io.trino.hdfs.gcs.GcsExclusiveOutputStream;
+import io.trino.hdfs.s3.TrinoS3FileSystem;
 import io.trino.memory.context.AggregatedMemoryContext;
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.file.FileAlreadyExistsException;
 
 import static io.trino.filesystem.hdfs.HadoopPaths.hadoopPath;
+import static io.trino.filesystem.hdfs.HdfsFileSystem.withCause;
 import static io.trino.hdfs.FileSystemUtils.getRawFileSystem;
 import static java.util.Objects.requireNonNull;
 
@@ -45,6 +52,7 @@ class HdfsOutputFile
         this.environment = requireNonNull(environment, "environment is null");
         this.context = requireNonNull(context, "context is null");
         this.createFileCallStat = requireNonNull(createFileCallStat, "createFileCallStat is null");
+        location.verifyValidFileLocation();
     }
 
     @Override
@@ -61,6 +69,21 @@ class HdfsOutputFile
         return create(true, memoryContext);
     }
 
+    @Override
+    public OutputStream createExclusive(AggregatedMemoryContext memoryContext)
+            throws IOException
+    {
+        Path file = hadoopPath(location);
+        FileSystem fileSystem = getRawFileSystem(environment.getFileSystem(context, file));
+        if (fileSystem instanceof TrinoS3FileSystem) {
+            throw new IOException("S3 does not support exclusive create");
+        }
+        if (fileSystem instanceof GoogleHadoopFileSystem) {
+            return new GcsExclusiveOutputStream(environment, context, file);
+        }
+        return create(memoryContext);
+    }
+
     private OutputStream create(boolean overwrite, AggregatedMemoryContext memoryContext)
             throws IOException
     {
@@ -70,14 +93,25 @@ class HdfsOutputFile
         FileSystem rawFileSystem = getRawFileSystem(fileSystem);
         try (TimeStat.BlockTimer ignored = createFileCallStat.time()) {
             if (rawFileSystem instanceof MemoryAwareFileSystem memoryAwareFileSystem) {
-                return environment.doAs(context.getIdentity(), () -> memoryAwareFileSystem.create(file, memoryContext));
+                return create(() -> memoryAwareFileSystem.create(file, memoryContext));
             }
-            return environment.doAs(context.getIdentity(), () -> fileSystem.create(file, overwrite));
+            return create(() -> fileSystem.create(file, overwrite));
+        }
+        catch (org.apache.hadoop.fs.FileAlreadyExistsException e) {
+            createFileCallStat.recordException(e);
+            throw withCause(new FileAlreadyExistsException(toString()), e);
         }
         catch (IOException e) {
             createFileCallStat.recordException(e);
-            throw e;
+            throw new IOException("Creation of file %s failed: %s".formatted(file, e.getMessage()), e);
         }
+    }
+
+    private OutputStream create(GenericExceptionAction<FSDataOutputStream, IOException> action)
+            throws IOException
+    {
+        FSDataOutputStream out = environment.doAs(context.getIdentity(), action);
+        return new HdfsOutputStream(location, out, environment, context);
     }
 
     @Override

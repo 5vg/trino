@@ -24,8 +24,9 @@ import io.trino.plugin.iceberg.containers.NessieContainer;
 import io.trino.testing.QueryRunner;
 import io.trino.testing.TestingConnectorBehavior;
 import io.trino.tpch.TpchTable;
-import org.testng.SkipException;
-import org.testng.annotations.AfterClass;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -35,9 +36,14 @@ import java.util.Optional;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.trino.plugin.iceberg.IcebergTestUtils.checkOrcFileSorting;
+import static io.trino.plugin.iceberg.IcebergTestUtils.checkParquetFileSorting;
 import static java.lang.String.format;
+import static org.apache.iceberg.FileFormat.PARQUET;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.abort;
+import static org.junit.jupiter.api.TestInstance.Lifecycle.PER_CLASS;
 
+@TestInstance(PER_CLASS)
 public class TestIcebergNessieCatalogConnectorSmokeTest
         extends BaseIcebergConnectorSmokeTest
 {
@@ -48,7 +54,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
         super(new IcebergConfig().getFileFormat().toIceberg());
     }
 
-    @AfterClass(alwaysRun = true)
+    @AfterAll
     public void teardown()
             throws IOException
     {
@@ -91,6 +97,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
         };
     }
 
+    @Test
     @Override
     public void testView()
     {
@@ -98,6 +105,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasStackTraceContaining("createView is not supported for Iceberg Nessie catalogs");
     }
 
+    @Test
     @Override
     public void testMaterializedView()
     {
@@ -105,6 +113,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasStackTraceContaining("createMaterializedView is not supported for Iceberg Nessie catalogs");
     }
 
+    @Test
     @Override
     public void testRenameSchema()
     {
@@ -112,10 +121,11 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasStackTraceContaining("renameNamespace is not supported for Iceberg Nessie catalogs");
     }
 
+    @Test
     @Override
     public void testDeleteRowsConcurrently()
     {
-        throw new SkipException("skipped for now due to flakiness");
+        abort("skipped for now due to flakiness");
     }
 
     @Override
@@ -131,6 +141,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
         throw new UnsupportedOperationException("metadata location for register_table is not supported");
     }
 
+    @Test
     @Override
     public void testRegisterTableWithTableLocation()
     {
@@ -138,6 +149,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageContaining("register_table procedure is disabled");
     }
 
+    @Test
     @Override
     public void testRegisterTableWithComments()
     {
@@ -145,6 +157,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageContaining("register_table procedure is disabled");
     }
 
+    @Test
     @Override
     public void testRegisterTableWithShowCreateTable()
     {
@@ -152,6 +165,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageContaining("register_table procedure is disabled");
     }
 
+    @Test
     @Override
     public void testRegisterTableWithReInsert()
     {
@@ -159,6 +173,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageContaining("register_table procedure is disabled");
     }
 
+    @Test
     @Override
     public void testRegisterTableWithDroppedTable()
     {
@@ -166,6 +181,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageContaining("register_table procedure is disabled");
     }
 
+    @Test
     @Override
     public void testRegisterTableWithDifferentTableName()
     {
@@ -173,6 +189,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageContaining("register_table procedure is disabled");
     }
 
+    @Test
     @Override
     public void testRegisterTableWithMetadataFile()
     {
@@ -180,6 +197,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageContaining("metadata location for register_table is not supported");
     }
 
+    @Test
     @Override
     public void testRegisterTableWithTrailingSpaceInLocation()
     {
@@ -187,6 +205,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageContaining("register_table procedure is disabled");
     }
 
+    @Test
     @Override
     public void testUnregisterTable()
     {
@@ -194,6 +213,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasStackTraceContaining("unregisterTable is not supported for Iceberg Nessie catalogs");
     }
 
+    @Test
     @Override
     public void testUnregisterBrokenTable()
     {
@@ -201,6 +221,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasStackTraceContaining("unregisterTable is not supported for Iceberg Nessie catalogs");
     }
 
+    @Test
     @Override
     public void testUnregisterTableNotExistingTable()
     {
@@ -208,6 +229,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasStackTraceContaining("unregisterTable is not supported for Iceberg Nessie catalogs");
     }
 
+    @Test
     @Override
     public void testRepeatUnregisterTable()
     {
@@ -215,6 +237,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasStackTraceContaining("unregisterTable is not supported for Iceberg Nessie catalogs");
     }
 
+    @Test
     @Override
     public void testDropTableWithMissingMetadataFile()
     {
@@ -222,6 +245,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageMatching("metadata location for register_table is not supported");
     }
 
+    @Test
     @Override
     public void testDropTableWithMissingSnapshotFile()
     {
@@ -229,6 +253,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageMatching("metadata location for register_table is not supported");
     }
 
+    @Test
     @Override
     public void testDropTableWithMissingManifestListFile()
     {
@@ -236,6 +261,7 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
                 .hasMessageContaining("metadata location for register_table is not supported");
     }
 
+    @Test
     @Override
     public void testDropTableWithNonExistentTableLocation()
     {
@@ -246,6 +272,9 @@ public class TestIcebergNessieCatalogConnectorSmokeTest
     @Override
     protected boolean isFileSorted(Location path, String sortColumnName)
     {
+        if (format == PARQUET) {
+            return checkParquetFileSorting(fileSystem.newInputFile(path), sortColumnName);
+        }
         return checkOrcFileSorting(fileSystem, path, sortColumnName);
     }
 

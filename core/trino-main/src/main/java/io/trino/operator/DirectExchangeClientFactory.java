@@ -26,10 +26,9 @@ import io.trino.execution.TaskFailureListener;
 import io.trino.memory.context.LocalMemoryContext;
 import io.trino.spi.QueryId;
 import io.trino.spi.exchange.ExchangeId;
+import jakarta.annotation.PreDestroy;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
-
-import javax.annotation.PreDestroy;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -142,18 +141,12 @@ public class DirectExchangeClientFactory
             TaskFailureListener taskFailureListener,
             RetryPolicy retryPolicy)
     {
-        DirectExchangeBuffer buffer;
-        switch (retryPolicy) {
-            case TASK:
-            case QUERY:
-                buffer = new DeduplicatingDirectExchangeBuffer(scheduler, deduplicationBufferSize, retryPolicy, exchangeManagerRegistry, queryId, exchangeId);
-                break;
-            case NONE:
-                buffer = new StreamingDirectExchangeBuffer(scheduler, maxBufferedBytes);
-                break;
-            default:
-                throw new IllegalArgumentException("unexpected retry policy: " + retryPolicy);
-        }
+        @SuppressWarnings("resource")
+        DirectExchangeBuffer buffer = switch (retryPolicy) {
+            case TASK -> throw new UnsupportedOperationException();
+            case QUERY -> new DeduplicatingDirectExchangeBuffer(scheduler, deduplicationBufferSize, retryPolicy, exchangeManagerRegistry, queryId, exchangeId);
+            case NONE -> new StreamingDirectExchangeBuffer(scheduler, maxBufferedBytes);
+        };
 
         return new DirectExchangeClient(
                 nodeInfo.getExternalAddress(),

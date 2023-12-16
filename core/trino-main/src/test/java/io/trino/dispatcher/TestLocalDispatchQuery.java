@@ -21,6 +21,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.json.JsonCodec;
 import io.airlift.node.NodeInfo;
 import io.airlift.units.Duration;
+import io.opentelemetry.api.OpenTelemetry;
 import io.trino.Session;
 import io.trino.client.NodeVersion;
 import io.trino.connector.CatalogProperties;
@@ -46,6 +47,7 @@ import io.trino.metadata.FunctionManager;
 import io.trino.metadata.GlobalFunctionCatalog;
 import io.trino.metadata.InMemoryNodeManager;
 import io.trino.metadata.InternalNodeManager;
+import io.trino.metadata.LanguageFunctionProvider;
 import io.trino.metadata.Metadata;
 import io.trino.metadata.SessionPropertyManager;
 import io.trino.operator.OperatorStats;
@@ -62,7 +64,7 @@ import io.trino.sql.tree.Expression;
 import io.trino.sql.tree.QualifiedName;
 import io.trino.sql.tree.Statement;
 import io.trino.transaction.TransactionManager;
-import org.testng.annotations.Test;
+import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.util.List;
@@ -76,10 +78,11 @@ import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.trino.SessionTestUtils.TEST_SESSION;
 import static io.trino.execution.querystats.PlanOptimizersStatsCollector.createPlanOptimizersStatsCollector;
 import static io.trino.metadata.MetadataManager.createTestMetadataManager;
+import static io.trino.sql.tree.SaveMode.FAIL;
 import static io.trino.testing.TestingEventListenerManager.emptyEventListenerManager;
 import static io.trino.transaction.InMemoryTransactionManager.createTestTransactionManager;
 import static java.util.concurrent.Executors.newCachedThreadPool;
-import static org.testng.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestLocalDispatchQuery
 {
@@ -94,9 +97,11 @@ public class TestLocalDispatchQuery
         Metadata metadata = createTestMetadataManager();
         TransactionManager transactionManager = createTestTransactionManager();
         AccessControlManager accessControl = new AccessControlManager(
+                NodeVersion.UNKNOWN,
                 transactionManager,
                 emptyEventListenerManager(),
                 new AccessControlConfig(),
+                OpenTelemetry.noop(),
                 DefaultSystemAccessControl.NAME);
         accessControl.setSystemAccessControls(List.of(AllowAllSystemAccessControl.INSTANCE));
         QueryStateMachine queryStateMachine = QueryStateMachine.begin(
@@ -128,9 +133,13 @@ public class TestLocalDispatchQuery
                 metadata,
                 new FunctionManager(
                         new ConnectorCatalogServiceProvider<>("function provider", new NoConnectorServicesProvider(), ConnectorServices::getFunctionProvider),
-                        new GlobalFunctionCatalog()),
+                        new GlobalFunctionCatalog(
+                                () -> { throw new UnsupportedOperationException(); },
+                                () -> { throw new UnsupportedOperationException(); },
+                                () -> { throw new UnsupportedOperationException(); }),
+                        LanguageFunctionProvider.DISABLED),
                 new QueryMonitorConfig());
-        CreateTable createTable = new CreateTable(QualifiedName.of("table"), ImmutableList.of(), false, ImmutableList.of(), Optional.empty());
+        CreateTable createTable = new CreateTable(QualifiedName.of("table"), ImmutableList.of(), FAIL, ImmutableList.of(), Optional.empty());
         QueryPreparer.PreparedQuery preparedQuery = new QueryPreparer.PreparedQuery(createTable, ImmutableList.of(), Optional.empty());
         DataDefinitionExecution.DataDefinitionExecutionFactory dataDefinitionExecutionFactory = new DataDefinitionExecution.DataDefinitionExecutionFactory(
                 ImmutableMap.<Class<? extends Statement>, DataDefinitionTask<?>>of(CreateTable.class, new TestCreateTableTask()));
@@ -146,7 +155,7 @@ public class TestLocalDispatchQuery
                 queryMonitor,
                 new TestClusterSizeMonitor(new InMemoryNodeManager(ImmutableSet.of()), new NodeSchedulerConfig()),
                 executor,
-                (queryExecution -> dataDefinitionExecution.start()));
+                queryExecution -> dataDefinitionExecution.start());
         queryStateMachine.addStateChangeListener(state -> {
             if (state.ordinal() >= QueryState.PLANNING.ordinal()) {
                 countDownLatch.countDown();
@@ -154,7 +163,7 @@ public class TestLocalDispatchQuery
         });
         localDispatchQuery.startWaitingForResources();
         countDownLatch.await();
-        assertTrue(localDispatchQuery.getDispatchInfo().getCoordinatorLocation().isPresent());
+        assertThat(localDispatchQuery.getDispatchInfo().getCoordinatorLocation().isPresent()).isTrue();
     }
 
     private static class NoConnectorServicesProvider

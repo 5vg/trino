@@ -27,9 +27,11 @@ import io.trino.sql.tree.QualifiedName;
 import io.trino.sql.tree.SetTimeZone;
 import io.trino.sql.tree.StringLiteral;
 import io.trino.testing.LocalQueryRunner;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
-import org.testng.annotations.Test;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.parallel.Execution;
 
 import java.net.URI;
 import java.util.Map;
@@ -41,28 +43,34 @@ import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.trino.SessionTestUtils.TEST_SESSION;
 import static io.trino.SystemSessionProperties.TIME_ZONE_ID;
 import static io.trino.execution.querystats.PlanOptimizersStatsCollector.createPlanOptimizersStatsCollector;
+import static io.trino.spi.type.VarcharType.VARCHAR;
+import static io.trino.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.trino.sql.tree.IntervalLiteral.IntervalField.HOUR;
 import static io.trino.sql.tree.IntervalLiteral.IntervalField.MINUTE;
 import static io.trino.sql.tree.IntervalLiteral.Sign.NEGATIVE;
 import static io.trino.sql.tree.IntervalLiteral.Sign.POSITIVE;
+import static io.trino.testing.TestingSession.testSession;
 import static java.util.Collections.emptyList;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.testng.Assert.assertEquals;
+import static org.junit.jupiter.api.TestInstance.Lifecycle.PER_CLASS;
+import static org.junit.jupiter.api.parallel.ExecutionMode.CONCURRENT;
 
+@TestInstance(PER_CLASS)
+@Execution(CONCURRENT)
 public class TestSetTimeZoneTask
 {
     private ExecutorService executor = newCachedThreadPool(daemonThreadsNamed(getClass().getSimpleName() + "-%s"));
     private LocalQueryRunner localQueryRunner;
 
-    @BeforeClass
+    @BeforeAll
     public void setUp()
     {
         localQueryRunner = LocalQueryRunner.create(TEST_SESSION);
     }
 
-    @AfterClass(alwaysRun = true)
+    @AfterAll
     public void tearDown()
     {
         executor.shutdownNow();
@@ -95,7 +103,7 @@ public class TestSetTimeZoneTask
 
         Map<String, String> setSessionProperties = stateMachine.getSetSessionProperties();
         assertThat(setSessionProperties).hasSize(1);
-        assertEquals(setSessionProperties.get(TIME_ZONE_ID), "America/Los_Angeles");
+        assertThat(setSessionProperties).containsEntry(TIME_ZONE_ID, "America/Los_Angeles");
     }
 
     @Test
@@ -106,7 +114,7 @@ public class TestSetTimeZoneTask
                 new NodeLocation(1, 1),
                 Optional.of(new FunctionCall(
                         new NodeLocation(1, 15),
-                        QualifiedName.of(ImmutableList.of(new Identifier(new NodeLocation(1, 15), "concat_ws", false))),
+                        localQueryRunner.getMetadata().resolveBuiltinFunction("concat_ws", fromTypes(VARCHAR, VARCHAR, VARCHAR)).toQualifiedName(),
                         ImmutableList.of(
                                 new StringLiteral(
                                         new NodeLocation(1, 25),
@@ -121,7 +129,7 @@ public class TestSetTimeZoneTask
 
         Map<String, String> setSessionProperties = stateMachine.getSetSessionProperties();
         assertThat(setSessionProperties).hasSize(1);
-        assertEquals(setSessionProperties.get(TIME_ZONE_ID), "America/Los_Angeles");
+        assertThat(setSessionProperties).containsEntry(TIME_ZONE_ID, "America/Los_Angeles");
     }
 
     @Test
@@ -162,7 +170,7 @@ public class TestSetTimeZoneTask
 
         Map<String, String> setSessionProperties = stateMachine.getSetSessionProperties();
         assertThat(setSessionProperties).hasSize(1);
-        assertEquals(setSessionProperties.get(TIME_ZONE_ID), "+10:00");
+        assertThat(setSessionProperties).containsEntry(TIME_ZONE_ID, "+10:00");
     }
 
     @Test
@@ -173,7 +181,7 @@ public class TestSetTimeZoneTask
                 new NodeLocation(1, 1),
                 Optional.of(new FunctionCall(
                         new NodeLocation(1, 24),
-                        QualifiedName.of(ImmutableList.of(new Identifier(new NodeLocation(1, 24), "parse_duration", false))),
+                        localQueryRunner.getMetadata().resolveBuiltinFunction("parse_duration", fromTypes(VARCHAR)).toQualifiedName(),
                         ImmutableList.of(
                                 new StringLiteral(
                                         new NodeLocation(1, 39),
@@ -182,7 +190,7 @@ public class TestSetTimeZoneTask
 
         Map<String, String> setSessionProperties = stateMachine.getSetSessionProperties();
         assertThat(setSessionProperties).hasSize(1);
-        assertEquals(setSessionProperties.get(TIME_ZONE_ID), "+08:00");
+        assertThat(setSessionProperties).containsEntry(TIME_ZONE_ID, "+08:00");
     }
 
     @Test
@@ -193,7 +201,7 @@ public class TestSetTimeZoneTask
                 new NodeLocation(1, 1),
                 Optional.of(new FunctionCall(
                         new NodeLocation(1, 24),
-                        QualifiedName.of(ImmutableList.of(new Identifier(new NodeLocation(1, 24), "parse_duration", false))),
+                        localQueryRunner.getMetadata().resolveBuiltinFunction("parse_duration", fromTypes(VARCHAR)).toQualifiedName(),
                         ImmutableList.of(
                                 new StringLiteral(
                                         new NodeLocation(1, 39),
@@ -238,7 +246,7 @@ public class TestSetTimeZoneTask
 
         Map<String, String> setSessionProperties = stateMachine.getSetSessionProperties();
         assertThat(setSessionProperties).hasSize(1);
-        assertEquals(setSessionProperties.get(TIME_ZONE_ID), "-08:00");
+        assertThat(setSessionProperties).containsEntry(TIME_ZONE_ID, "-08:00");
     }
 
     private QueryStateMachine createQueryStateMachine(String query)
@@ -247,7 +255,7 @@ public class TestSetTimeZoneTask
                 Optional.empty(),
                 query,
                 Optional.empty(),
-                TEST_SESSION,
+                testSession(),
                 URI.create("fake://uri"),
                 new ResourceGroupId("test"),
                 false,

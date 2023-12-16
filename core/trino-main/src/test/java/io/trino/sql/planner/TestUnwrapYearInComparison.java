@@ -15,7 +15,7 @@ package io.trino.sql.planner;
 
 import io.trino.spi.type.LongTimestamp;
 import io.trino.sql.planner.assertions.BasePlanTest;
-import org.testng.annotations.Test;
+import org.junit.jupiter.api.Test;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -36,7 +36,7 @@ import static java.lang.Math.multiplyExact;
 import static java.lang.String.format;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Arrays.asList;
-import static org.testng.Assert.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestUnwrapYearInComparison
         extends BasePlanTest
@@ -67,6 +67,13 @@ public class TestUnwrapYearInComparison
         testUnwrap("timestamp(10)", "year(a) = 2022", "a BETWEEN TIMESTAMP '2022-01-01 00:00:00.0000000000' AND TIMESTAMP '2022-12-31 23:59:59.9999999999'");
         testUnwrap("timestamp(11)", "year(a) = 2022", "a BETWEEN TIMESTAMP '2022-01-01 00:00:00.00000000000' AND TIMESTAMP '2022-12-31 23:59:59.99999999999'");
         testUnwrap("timestamp(12)", "year(a) = 2022", "a BETWEEN TIMESTAMP '2022-01-01 00:00:00.000000000000' AND TIMESTAMP '2022-12-31 23:59:59.999999999999'");
+    }
+
+    @Test
+    public void testInPredicate()
+    {
+        testUnwrap("date", "year(a) IN (1000, 1400, 1800)", "a BETWEEN DATE '1000-01-01' AND DATE '1000-12-31' OR a BETWEEN DATE '1400-01-01' AND DATE '1400-12-31' OR a BETWEEN DATE '1800-01-01' AND DATE '1800-12-31'");
+        testUnwrap("timestamp", "year(a) IN (1000, 1400, 1800)", "a BETWEEN TIMESTAMP '1000-01-01 00:00:00.000' AND TIMESTAMP '1000-12-31 23:59:59.999' OR a BETWEEN TIMESTAMP '1400-01-01 00:00:00.000' AND TIMESTAMP '1400-12-31 23:59:59.999' OR a BETWEEN TIMESTAMP '1800-01-01 00:00:00.000' AND TIMESTAMP '1800-12-31 23:59:59.999'");
     }
 
     @Test
@@ -281,39 +288,19 @@ public class TestUnwrapYearInComparison
     @Test
     public void testCalculateRangeEndInclusive()
     {
-        assertEquals(calculateRangeEndInclusive(1960, DATE), LocalDate.of(1960, 12, 31).toEpochDay());
-        assertEquals(calculateRangeEndInclusive(2024, DATE), LocalDate.of(2024, 12, 31).toEpochDay());
+        assertThat(calculateRangeEndInclusive(1960, DATE)).isEqualTo(LocalDate.of(1960, 12, 31).toEpochDay());
+        assertThat(calculateRangeEndInclusive(2024, DATE)).isEqualTo(LocalDate.of(2024, 12, 31).toEpochDay());
 
-        assertEquals(
-                calculateRangeEndInclusive(1960, TIMESTAMP_SECONDS),
-                toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59)));
-        assertEquals(
-                calculateRangeEndInclusive(1960, TIMESTAMP_MILLIS),
-                toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59, 999_000_000)));
-        assertEquals(
-                calculateRangeEndInclusive(1960, TIMESTAMP_MICROS),
-                toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59, 999_999_000)));
-        assertEquals(
-                calculateRangeEndInclusive(1960, TIMESTAMP_NANOS),
-                new LongTimestamp(toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59, 999_999_000)), 999_000));
-        assertEquals(
-                calculateRangeEndInclusive(1960, TIMESTAMP_PICOS),
-                new LongTimestamp(toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59, 999_999_000)), 999_999));
-        assertEquals(
-                calculateRangeEndInclusive(2024, TIMESTAMP_SECONDS),
-                toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59)));
-        assertEquals(
-                calculateRangeEndInclusive(2024, TIMESTAMP_MILLIS),
-                toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59, 999_000_000)));
-        assertEquals(
-                calculateRangeEndInclusive(2024, TIMESTAMP_MICROS),
-                toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59, 999_999_000)));
-        assertEquals(
-                calculateRangeEndInclusive(2024, TIMESTAMP_NANOS),
-                new LongTimestamp(toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59, 999_999_000)), 999_000));
-        assertEquals(
-                calculateRangeEndInclusive(2024, TIMESTAMP_PICOS),
-                new LongTimestamp(toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59, 999_999_000)), 999_999));
+        assertThat(calculateRangeEndInclusive(1960, TIMESTAMP_SECONDS)).isEqualTo(toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59)));
+        assertThat(calculateRangeEndInclusive(1960, TIMESTAMP_MILLIS)).isEqualTo(toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59, 999_000_000)));
+        assertThat(calculateRangeEndInclusive(1960, TIMESTAMP_MICROS)).isEqualTo(toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59, 999_999_000)));
+        assertThat(calculateRangeEndInclusive(1960, TIMESTAMP_NANOS)).isEqualTo(new LongTimestamp(toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59, 999_999_000)), 999_000));
+        assertThat(calculateRangeEndInclusive(1960, TIMESTAMP_PICOS)).isEqualTo(new LongTimestamp(toEpochMicros(LocalDateTime.of(1960, 12, 31, 23, 59, 59, 999_999_000)), 999_999));
+        assertThat(calculateRangeEndInclusive(2024, TIMESTAMP_SECONDS)).isEqualTo(toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59)));
+        assertThat(calculateRangeEndInclusive(2024, TIMESTAMP_MILLIS)).isEqualTo(toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59, 999_000_000)));
+        assertThat(calculateRangeEndInclusive(2024, TIMESTAMP_MICROS)).isEqualTo(toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59, 999_999_000)));
+        assertThat(calculateRangeEndInclusive(2024, TIMESTAMP_NANOS)).isEqualTo(new LongTimestamp(toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59, 999_999_000)), 999_000));
+        assertThat(calculateRangeEndInclusive(2024, TIMESTAMP_PICOS)).isEqualTo(new LongTimestamp(toEpochMicros(LocalDateTime.of(2024, 12, 31, 23, 59, 59, 999_999_000)), 999_999));
     }
 
     private static long toEpochMicros(LocalDateTime localDateTime)
@@ -330,7 +317,7 @@ public class TestUnwrapYearInComparison
                     sql,
                     getQueryRunner().getDefaultSession(),
                     output(
-                            filter(expectedPredicate + " OR rand() = 42e0",
+                            filter(expectedPredicate + " OR random() = 42e0",
                                     values("a"))));
         }
         catch (Throwable e) {

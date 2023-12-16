@@ -14,6 +14,7 @@
 package io.trino.server.remotetask;
 
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import io.airlift.concurrent.SetThreadName;
 import io.airlift.http.client.FullJsonResponseHandler.JsonResponse;
 import io.airlift.http.client.HttpClient;
@@ -24,8 +25,6 @@ import io.opentelemetry.api.trace.SpanBuilder;
 import io.trino.execution.DynamicFiltersCollector.VersionedDynamicFilterDomains;
 import io.trino.execution.TaskId;
 import io.trino.server.DynamicFilterService;
-
-import javax.annotation.concurrent.GuardedBy;
 
 import java.net.URI;
 import java.util.concurrent.Executor;
@@ -170,6 +169,7 @@ class DynamicFiltersFetcher
                     errorTracker.requestSucceeded();
                 }
                 finally {
+                    cleanupRequest();
                     fetchDynamicFiltersIfNecessary();
                 }
             }
@@ -191,6 +191,7 @@ class DynamicFiltersFetcher
                     onFail.accept(e);
                 }
                 finally {
+                    cleanupRequest();
                     fetchDynamicFiltersIfNecessary();
                 }
             }
@@ -203,6 +204,14 @@ class DynamicFiltersFetcher
                 updateStats(requestStartNanos);
                 onFail.accept(cause);
             }
+        }
+    }
+
+    private synchronized void cleanupRequest()
+    {
+        if (future != null && future.isDone()) {
+            // remove outstanding reference to JSON response
+            future = null;
         }
     }
 

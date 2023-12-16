@@ -112,6 +112,7 @@ public final class ChoicesSpecializedSqlScalarFunction
         ScalarImplementationChoice bestChoice = Collections.max(choices, comparingInt(ScalarImplementationChoice::getScore));
         MethodHandle methodHandle = ScalarFunctionAdapter.adapt(
                 bestChoice.getMethodHandle(),
+                boundSignature.getReturnType(),
                 boundSignature.getArgumentTypes(),
                 bestChoice.getInvocationConvention(),
                 invocationConvention);
@@ -203,8 +204,13 @@ public final class ChoicesSpecializedSqlScalarFunction
                     case NULL_FLAG:
                         score += 1;
                         break;
+                    case BLOCK_POSITION_NOT_NULL:
                     case BLOCK_POSITION:
                         score += 1000;
+                        break;
+                    case VALUE_BLOCK_POSITION_NOT_NULL:
+                    case VALUE_BLOCK_POSITION:
+                        score += 2000;
                         break;
                     case IN_OUT:
                         score += 10_000;

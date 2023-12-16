@@ -6,12 +6,11 @@
     <parent>
         <groupId>io.trino</groupId>
         <artifactId>trino-root</artifactId>
-        <version>419-SNAPSHOT</version>
+        <version>436-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <artifactId>trino-phoenix5-patched</artifactId>
-    <name>trino-phoenix5-patched</name>
     <description>Trino - patched Phoenix5 client to work with JDK17</description>
 
     <properties>
@@ -26,8 +25,14 @@
         </dependency>
 
         <dependency>
-            <groupId>org.testng</groupId>
-            <artifactId>testng</artifactId>
+            <groupId>io.airlift</groupId>
+            <artifactId>junit-extensions</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -39,15 +44,13 @@
                 <artifactId>maven-shade-plugin</artifactId>
                 <executions>
                     <execution>
-                        <phase>package</phase>
                         <goals>
                             <goal>shade</goal>
                         </goals>
+                        <phase>package</phase>
                         <configuration>
-                            <createDependencyReducedPom>true</createDependencyReducedPom>
                             <createSourcesJar>false</createSourcesJar>
                             <shadeSourcesContent>false</shadeSourcesContent>
-                            <dependencyReducedPomLocation>${project.build.directory}/pom.xml</dependencyReducedPomLocation>
                             <promoteTransitiveDependencies>false</promoteTransitiveDependencies>
                             <relocations>
                                 <relocation>

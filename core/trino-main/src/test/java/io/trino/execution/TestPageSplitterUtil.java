@@ -17,11 +17,11 @@ import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 import io.trino.spi.Page;
 import io.trino.spi.block.Block;
-import io.trino.spi.block.BlockBuilder;
 import io.trino.spi.block.RunLengthEncodedBlock;
+import io.trino.spi.block.VariableWidthBlockBuilder;
 import io.trino.spi.type.Type;
 import io.trino.testing.MaterializedResult;
-import org.testng.annotations.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
@@ -36,7 +36,6 @@ import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.testng.Assert.assertEquals;
 
 public class TestPageSplitterUtil
 {
@@ -71,7 +70,7 @@ public class TestPageSplitterUtil
         for (Page page : pages) {
             totalPositionCount += page.getPositionCount();
         }
-        assertEquals(totalPositionCount, positionCount);
+        assertThat(totalPositionCount).isEqualTo(positionCount);
     }
 
     @Test
@@ -82,15 +81,15 @@ public class TestPageSplitterUtil
         List<Type> types = ImmutableList.of(VARCHAR);
 
         Slice expectedValue = wrappedBuffer("test".getBytes(UTF_8));
-        BlockBuilder blockBuilder = VARCHAR.createBlockBuilder(null, 1, expectedValue.length());
-        blockBuilder.writeBytes(expectedValue, 0, expectedValue.length()).closeEntry();
+        VariableWidthBlockBuilder blockBuilder = VARCHAR.createBlockBuilder(null, 1, expectedValue.length());
+        blockBuilder.writeEntry(expectedValue);
         Block rleBlock = RunLengthEncodedBlock.create(blockBuilder.build(), positionCount);
         Page initialPage = new Page(rleBlock);
         List<Page> pages = splitPage(initialPage, maxPageSizeInBytes);
 
         // the page should only be split in half as the recursion should terminate
         // after seeing that the size of the Page doesn't decrease
-        assertEquals(pages.size(), 2);
+        assertThat(pages.size()).isEqualTo(2);
         Page first = pages.get(0);
         Page second = pages.get(1);
 

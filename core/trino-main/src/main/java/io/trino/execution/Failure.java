@@ -14,11 +14,11 @@
 package io.trino.execution;
 
 import io.trino.spi.ErrorCode;
-
-import javax.annotation.Nullable;
+import jakarta.annotation.Nullable;
 
 import static java.util.Objects.requireNonNull;
 
+@SuppressWarnings("ExceptionClassNameDoesntEndWithException")
 public class Failure
         extends RuntimeException
 {

@@ -14,7 +14,6 @@
 package io.trino.filesystem;
 
 import com.google.common.base.Splitter;
-import com.google.common.collect.Iterables;
 
 import java.io.File;
 import java.util.List;
@@ -23,7 +22,7 @@ import java.util.OptionalInt;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static java.lang.Character.isWhitespace;
+import static com.google.common.collect.Iterables.getLast;
 import static java.lang.Integer.parseInt;
 import static java.util.Objects.requireNonNull;
 import static java.util.function.Predicate.not;
@@ -62,9 +61,6 @@ public final class Location
         checkArgument(!location.isEmpty(), "location is empty");
         checkArgument(!location.isBlank(), "location is blank");
 
-        checkArgument(location.indexOf('#') < 0, "Fragment is not allowed in a file system location: %s", location);
-        checkArgument(location.indexOf('?') < 0, "URI query component is not allowed in a file system location: %s", location);
-
         // legacy HDFS location that is just a path
         if (location.startsWith("/")) {
             return new Location(location, Optional.empty(), Optional.empty(), Optional.empty(), OptionalInt.empty(), location.substring(1));
@@ -78,11 +74,11 @@ public final class Location
         if (afterScheme.startsWith("//")) {
             // Locations with an authority must begin with a double slash
             afterScheme = afterScheme.substring(2);
-            List<String> userInfoSplit = USER_INFO_SPLITTER.splitToList(afterScheme);
-            Optional<String> userInfo = userInfoSplit.size() == 2 ? Optional.of(userInfoSplit.get(0)) : Optional.empty();
 
-            List<String> authoritySplit = AUTHORITY_SPLITTER.splitToList(Iterables.getLast(userInfoSplit));
-            List<String> hostAndPortSplit = HOST_AND_PORT_SPLITTER.splitToList(authoritySplit.get(0));
+            List<String> authoritySplit = AUTHORITY_SPLITTER.splitToList(afterScheme);
+            List<String> userInfoSplit = USER_INFO_SPLITTER.splitToList(authoritySplit.get(0));
+            Optional<String> userInfo = userInfoSplit.size() == 2 ? Optional.of(userInfoSplit.get(0)) : Optional.empty();
+            List<String> hostAndPortSplit = HOST_AND_PORT_SPLITTER.splitToList(getLast(userInfoSplit));
 
             Optional<String> host = Optional.of(hostAndPortSplit.get(0)).filter(not(String::isEmpty));
 
@@ -96,6 +92,7 @@ public final class Location
                 }
             }
 
+            checkArgument((userInfo.isEmpty() && host.isEmpty() && port.isEmpty()) || authoritySplit.size() == 2, "Path missing in file system location: %s", location);
             String path = (authoritySplit.size() == 2) ? authoritySplit.get(1) : "";
 
             return new Location(location, Optional.of(scheme), userInfo, host, port, path);
@@ -178,6 +175,20 @@ public final class Location
     }
 
     /**
+     * Returns a new location with the same parent directory as the current location,
+     * but with the filename corresponding to the specified name.
+     * The location must be a valid file location.
+     */
+    public Location sibling(String name)
+    {
+        requireNonNull(name, "name is null");
+        checkArgument(!name.isEmpty(), "name is empty");
+        verifyValidFileLocation();
+
+        return this.withPath(location.substring(0, location.lastIndexOf('/') + 1) + name, path.substring(0, path.lastIndexOf('/') + 1) + name);
+    }
+
+    /**
      * Creates a new location with all characters removed after the last slash in the path.
      * This should only be used once, as recursive calls for blob paths may lead to incorrect results.
      *
@@ -187,14 +198,12 @@ public final class Location
     {
         // todo should this only be allowed for file locations?
         verifyValidFileLocation();
-        checkState(!path.isEmpty(), "root location does not have parent: %s", location);
+        checkState(!path.isEmpty() && !path.equals("/"), "root location does not have parent: %s", location);
 
         int lastIndexOfSlash = path.lastIndexOf('/');
         if (lastIndexOfSlash < 0) {
             String newLocation = location.substring(0, location.length() - path.length() - 1);
-            if (newLocation.isEmpty()) {
-                newLocation = "/";
-            }
+            newLocation += "/";
             return withPath(newLocation, "");
         }
 
@@ -222,6 +231,17 @@ public final class Location
             newPathElement = "/" + newPathElement;
         }
         return withPath(location + newPathElement, path + newPathElement);
+    }
+
+    Location removeOneTrailingSlash()
+    {
+        if (path.endsWith("/")) {
+            return withPath(location.substring(0, location.length() - 1), path.substring(0, path.length() - 1));
+        }
+        if (path.equals("") && location.endsWith("/")) {
+            return withPath(location.substring(0, location.length() - 1), "");
+        }
+        return this;
     }
 
     /**
@@ -256,7 +276,7 @@ public final class Location
     }
 
     /**
-     * Verifies the location is valid for a file reference.  Specifically, the path must not be empty, must not end with a slash or whitespace.
+     * Verifies the location is valid for a file reference.  Specifically, the path must not be empty and must not end with a slash.
      *
      * @throws IllegalStateException if the location is not a valid file location
      */
@@ -266,9 +286,7 @@ public final class Location
         // file path must not be empty
         checkState(!path.isEmpty() && !path.equals("/"), "File location must contain a path: %s", location);
         // file path cannot end with a slash
-        checkState(!path.endsWith("/"), "File location cannot end with '/': '%s'", location);
-        // file path cannot end with whitespace
-        checkState(!isWhitespace(path.charAt(path.length() - 1)), "File location cannot end with whitespace: %s", location);
+        checkState(!path.endsWith("/"), "File location cannot end with '/': %s", location);
     }
 
     @Override

@@ -19,7 +19,6 @@ import io.opentelemetry.api.trace.Tracer;
 import io.trino.spi.connector.AggregateFunction;
 import io.trino.spi.connector.AggregationApplicationResult;
 import io.trino.spi.connector.BeginTableExecuteResult;
-import io.trino.spi.connector.CatalogSchemaName;
 import io.trino.spi.connector.CatalogSchemaTableName;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
@@ -50,10 +49,14 @@ import io.trino.spi.connector.JoinType;
 import io.trino.spi.connector.LimitApplicationResult;
 import io.trino.spi.connector.MaterializedViewFreshness;
 import io.trino.spi.connector.ProjectionApplicationResult;
+import io.trino.spi.connector.RelationColumnsMetadata;
+import io.trino.spi.connector.RelationCommentMetadata;
+import io.trino.spi.connector.RelationType;
 import io.trino.spi.connector.RetryMode;
 import io.trino.spi.connector.RowChangeParadigm;
 import io.trino.spi.connector.SampleApplicationResult;
 import io.trino.spi.connector.SampleType;
+import io.trino.spi.connector.SaveMode;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.SchemaTablePrefix;
 import io.trino.spi.connector.SortItem;
@@ -62,15 +65,18 @@ import io.trino.spi.connector.TableColumnsMetadata;
 import io.trino.spi.connector.TableFunctionApplicationResult;
 import io.trino.spi.connector.TableScanRedirectApplicationResult;
 import io.trino.spi.connector.TopNApplicationResult;
+import io.trino.spi.connector.WriterScalingOptions;
 import io.trino.spi.expression.ConnectorExpression;
+import io.trino.spi.expression.Constant;
 import io.trino.spi.function.AggregationFunctionMetadata;
 import io.trino.spi.function.BoundSignature;
 import io.trino.spi.function.FunctionDependencyDeclaration;
 import io.trino.spi.function.FunctionId;
 import io.trino.spi.function.FunctionMetadata;
+import io.trino.spi.function.LanguageFunction;
 import io.trino.spi.function.SchemaFunctionName;
+import io.trino.spi.function.table.ConnectorTableFunctionHandle;
 import io.trino.spi.predicate.TupleDomain;
-import io.trino.spi.ptf.ConnectorTableFunctionHandle;
 import io.trino.spi.security.GrantInfo;
 import io.trino.spi.security.Privilege;
 import io.trino.spi.security.RoleGrant;
@@ -89,8 +95,8 @@ import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.UnaryOperator;
 
-import static io.airlift.tracing.Tracing.attribute;
 import static io.trino.tracing.ScopedSpan.scopedSpan;
 import static java.util.Objects.requireNonNull;
 
@@ -225,16 +231,6 @@ public class TracingConnectorMetadata
         }
     }
 
-    @SuppressWarnings("deprecation")
-    @Override
-    public SchemaTableName getSchemaTableName(ConnectorSession session, ConnectorTableHandle table)
-    {
-        Span span = startSpan("getSchemaTableName", table);
-        try (var ignored = scopedSpan(span)) {
-            return delegate.getSchemaTableName(session, table);
-        }
-    }
-
     @Override
     public ConnectorTableSchema getTableSchema(ConnectorSession session, ConnectorTableHandle table)
     {
@@ -265,9 +261,18 @@ public class TracingConnectorMetadata
     @Override
     public List<SchemaTableName> listTables(ConnectorSession session, Optional<String> schemaName)
     {
-        Span span = startSpan("listTables");
+        Span span = startSpan("listTables", schemaName);
         try (var ignored = scopedSpan(span)) {
             return delegate.listTables(session, schemaName);
+        }
+    }
+
+    @Override
+    public Map<SchemaTableName, RelationType> getRelationTypes(ConnectorSession session, Optional<String> schemaName)
+    {
+        Span span = startSpan("getRelationTypes", schemaName);
+        try (var ignored = scopedSpan(span)) {
+            return delegate.getRelationTypes(session, schemaName);
         }
     }
 
@@ -309,6 +314,24 @@ public class TracingConnectorMetadata
     }
 
     @Override
+    public Iterator<RelationColumnsMetadata> streamRelationColumns(ConnectorSession session, Optional<String> schemaName, UnaryOperator<Set<SchemaTableName>> relationFilter)
+    {
+        Span span = startSpan("streamRelationColumns", schemaName);
+        try (var ignored = scopedSpan(span)) {
+            return delegate.streamRelationColumns(session, schemaName, relationFilter);
+        }
+    }
+
+    @Override
+    public Iterator<RelationCommentMetadata> streamRelationComments(ConnectorSession session, Optional<String> schemaName, UnaryOperator<Set<SchemaTableName>> relationFilter)
+    {
+        Span span = startSpan("streamRelationComments", schemaName);
+        try (var ignored = scopedSpan(span)) {
+            return delegate.streamRelationComments(session, schemaName, relationFilter);
+        }
+    }
+
+    @Override
     public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         Span span = startSpan("getTableStatistics", tableHandle);
@@ -327,11 +350,12 @@ public class TracingConnectorMetadata
     }
 
     @Override
-    public void dropSchema(ConnectorSession session, String schemaName)
+    public void dropSchema(ConnectorSession session, String schemaName, boolean cascade)
     {
-        Span span = startSpan("dropSchema", schemaName);
+        Span span = startSpan("dropSchema", schemaName)
+                .setAttribute(TrinoAttributes.CASCADE, cascade);
         try (var ignored = scopedSpan(span)) {
-            delegate.dropSchema(session, schemaName);
+            delegate.dropSchema(session, schemaName, cascade);
         }
     }
 
@@ -359,6 +383,15 @@ public class TracingConnectorMetadata
         Span span = startSpan("createTable", tableMetadata.getTable());
         try (var ignored = scopedSpan(span)) {
             delegate.createTable(session, tableMetadata, ignoreExisting);
+        }
+    }
+
+    @Override
+    public void createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, SaveMode saveMode)
+    {
+        Span span = startSpan("createTable", tableMetadata.getTable());
+        try (var ignored = scopedSpan(span)) {
+            delegate.createTable(session, tableMetadata, saveMode);
         }
     }
 
@@ -426,6 +459,15 @@ public class TracingConnectorMetadata
     }
 
     @Override
+    public void setMaterializedViewColumnComment(ConnectorSession session, SchemaTableName viewName, String columnName, Optional<String> comment)
+    {
+        Span span = startSpan("setMaterializedViewColumnComment", viewName);
+        try (var ignored = scopedSpan(span)) {
+            delegate.setMaterializedViewColumnComment(session, viewName, columnName, comment);
+        }
+    }
+
+    @Override
     public void setColumnComment(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle column, Optional<String> comment)
     {
         Span span = startSpan("setColumnComment", tableHandle);
@@ -444,11 +486,29 @@ public class TracingConnectorMetadata
     }
 
     @Override
+    public void addField(ConnectorSession session, ConnectorTableHandle tableHandle, List<String> parentPath, String fieldName, Type type, boolean ignoreExisting)
+    {
+        Span span = startSpan("addField", tableHandle);
+        try (var ignored = scopedSpan(span)) {
+            delegate.addField(session, tableHandle, parentPath, fieldName, type, ignoreExisting);
+        }
+    }
+
+    @Override
     public void setColumnType(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle column, Type type)
     {
         Span span = startSpan("setColumnType", tableHandle);
         try (var ignored = scopedSpan(span)) {
             delegate.setColumnType(session, tableHandle, column, type);
+        }
+    }
+
+    @Override
+    public void setFieldType(ConnectorSession session, ConnectorTableHandle tableHandle, List<String> fieldPath, Type type)
+    {
+        Span span = startSpan("setFieldType", tableHandle);
+        try (var ignored = scopedSpan(span)) {
+            delegate.setFieldType(session, tableHandle, fieldPath, type);
         }
     }
 
@@ -467,6 +527,15 @@ public class TracingConnectorMetadata
         Span span = startSpan("renameColumn", tableHandle);
         try (var ignored = scopedSpan(span)) {
             delegate.renameColumn(session, tableHandle, source, target);
+        }
+    }
+
+    @Override
+    public void renameField(ConnectorSession session, ConnectorTableHandle tableHandle, List<String> fieldPath, String target)
+    {
+        Span span = startSpan("renameField", tableHandle);
+        try (var ignored = scopedSpan(span)) {
+            delegate.renameField(session, tableHandle, fieldPath, target);
         }
     }
 
@@ -494,6 +563,15 @@ public class TracingConnectorMetadata
         Span span = startSpan("getNewTableLayout", tableMetadata.getTable());
         try (var ignored = scopedSpan(span)) {
             return delegate.getNewTableLayout(session, tableMetadata);
+        }
+    }
+
+    @Override
+    public Optional<Type> getSupportedType(ConnectorSession session, Map<String, Object> tableProperties, Type type)
+    {
+        Span span = startSpan("getSupportedType");
+        try (var ignored = scopedSpan(span)) {
+            return delegate.getSupportedType(session, tableProperties, type);
         }
     }
 
@@ -548,6 +626,15 @@ public class TracingConnectorMetadata
         Span span = startSpan("beginCreateTable", tableMetadata.getTable());
         try (var ignored = scopedSpan(span)) {
             return delegate.beginCreateTable(session, tableMetadata, layout, retryMode);
+        }
+    }
+
+    @Override
+    public ConnectorOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Optional<ConnectorTableLayout> layout, RetryMode retryMode, boolean replace)
+    {
+        Span span = startSpan("beginCreateTable", tableMetadata.getTable());
+        try (var ignored = scopedSpan(span)) {
+            return delegate.beginCreateTable(session, tableMetadata, layout, retryMode, replace);
         }
     }
 
@@ -755,16 +842,6 @@ public class TracingConnectorMetadata
         }
     }
 
-    @SuppressWarnings("removal")
-    @Override
-    public Map<String, Object> getSchemaProperties(ConnectorSession session, CatalogSchemaName schemaName)
-    {
-        Span span = startSpan("getSchemaProperties", schemaName.getSchemaName());
-        try (var ignored = scopedSpan(span)) {
-            return delegate.getSchemaProperties(session, schemaName);
-        }
-    }
-
     @Override
     public Map<String, Object> getSchemaProperties(ConnectorSession session, String schemaName)
     {
@@ -774,22 +851,30 @@ public class TracingConnectorMetadata
         }
     }
 
-    @SuppressWarnings("removal")
-    @Override
-    public Optional<TrinoPrincipal> getSchemaOwner(ConnectorSession session, CatalogSchemaName schemaName)
-    {
-        Span span = startSpan("getSchemaOwner", schemaName.getSchemaName());
-        try (var ignored = scopedSpan(span)) {
-            return delegate.getSchemaOwner(session, schemaName);
-        }
-    }
-
     @Override
     public Optional<TrinoPrincipal> getSchemaOwner(ConnectorSession session, String schemaName)
     {
         Span span = startSpan("getSchemaOwner", schemaName);
         try (var ignored = scopedSpan(span)) {
             return delegate.getSchemaOwner(session, schemaName);
+        }
+    }
+
+    @Override
+    public Optional<ConnectorTableHandle> applyUpdate(ConnectorSession session, ConnectorTableHandle handle, Map<ColumnHandle, Constant> assignments)
+    {
+        Span span = startSpan("applyUpdate", handle);
+        try (var ignored = scopedSpan(span)) {
+            return delegate.applyUpdate(session, handle, assignments);
+        }
+    }
+
+    @Override
+    public OptionalLong executeUpdate(ConnectorSession session, ConnectorTableHandle handle)
+    {
+        Span span = startSpan("executeUpdate", handle);
+        try (var ignored = scopedSpan(span)) {
+            return delegate.executeUpdate(session, handle);
         }
     }
 
@@ -863,6 +948,55 @@ public class TracingConnectorMetadata
         Span span = startSpan("getFunctionDependencies", functionId);
         try (var ignored = scopedSpan(span)) {
             return delegate.getFunctionDependencies(session, functionId, boundSignature);
+        }
+    }
+
+    @Override
+    public Collection<LanguageFunction> listLanguageFunctions(ConnectorSession session, String schemaName)
+    {
+        Span span = startSpan("listLanguageFunctions", schemaName);
+        try (var ignored = scopedSpan(span)) {
+            return delegate.listLanguageFunctions(session, schemaName);
+        }
+    }
+
+    @Override
+    public Collection<LanguageFunction> getLanguageFunctions(ConnectorSession session, SchemaFunctionName name)
+    {
+        Span span = startSpan("getLanguageFunctions", name.getSchemaName())
+                .setAttribute(TrinoAttributes.FUNCTION, name.getFunctionName());
+        try (var ignored = scopedSpan(span)) {
+            return delegate.getLanguageFunctions(session, name);
+        }
+    }
+
+    @Override
+    public boolean languageFunctionExists(ConnectorSession session, SchemaFunctionName name, String signatureToken)
+    {
+        Span span = startSpan("languageFunctionExists", name.getSchemaName())
+                .setAttribute(TrinoAttributes.FUNCTION, name.getFunctionName());
+        try (var ignored = scopedSpan(span)) {
+            return delegate.languageFunctionExists(session, name, signatureToken);
+        }
+    }
+
+    @Override
+    public void createLanguageFunction(ConnectorSession session, SchemaFunctionName name, LanguageFunction function, boolean replace)
+    {
+        Span span = startSpan("createLanguageFunction", name.getSchemaName())
+                .setAttribute(TrinoAttributes.FUNCTION, name.getFunctionName());
+        try (var ignored = scopedSpan(span)) {
+            delegate.createLanguageFunction(session, name, function, replace);
+        }
+    }
+
+    @Override
+    public void dropLanguageFunction(ConnectorSession session, SchemaFunctionName name, String signatureToken)
+    {
+        Span span = startSpan("dropLanguageFunction", name.getSchemaName())
+                .setAttribute(TrinoAttributes.FUNCTION, name.getFunctionName());
+        try (var ignored = scopedSpan(span)) {
+            delegate.dropLanguageFunction(session, name, signatureToken);
         }
     }
 
@@ -1111,11 +1245,17 @@ public class TracingConnectorMetadata
     }
 
     @Override
-    public void createMaterializedView(ConnectorSession session, SchemaTableName viewName, ConnectorMaterializedViewDefinition definition, boolean replace, boolean ignoreExisting)
+    public void createMaterializedView(
+            ConnectorSession session,
+            SchemaTableName viewName,
+            ConnectorMaterializedViewDefinition definition,
+            Map<String, Object> properties,
+            boolean replace,
+            boolean ignoreExisting)
     {
         Span span = startSpan("createMaterializedView", viewName);
         try (var ignored = scopedSpan(span)) {
-            delegate.createMaterializedView(session, viewName, definition, replace, ignoreExisting);
+            delegate.createMaterializedView(session, viewName, definition, properties, replace, ignoreExisting);
         }
     }
 
@@ -1152,6 +1292,15 @@ public class TracingConnectorMetadata
         Span span = startSpan("getMaterializedView", viewName);
         try (var ignored = scopedSpan(span)) {
             return delegate.getMaterializedView(session, viewName);
+        }
+    }
+
+    @Override
+    public Map<String, Object> getMaterializedViewProperties(ConnectorSession session, SchemaTableName viewName, ConnectorMaterializedViewDefinition materializedViewDefinition)
+    {
+        Span span = startSpan("getMaterializedViewProperties", viewName);
+        try (var ignored = scopedSpan(span)) {
+            return delegate.getMaterializedViewProperties(session, viewName, materializedViewDefinition);
         }
     }
 
@@ -1201,29 +1350,29 @@ public class TracingConnectorMetadata
     }
 
     @Override
-    public boolean supportsReportingWrittenBytes(ConnectorSession session, SchemaTableName schemaTableName, Map<String, Object> tableProperties)
-    {
-        Span span = startSpan("supportsReportingWrittenBytes", schemaTableName);
-        try (var ignored = scopedSpan(span)) {
-            return delegate.supportsReportingWrittenBytes(session, schemaTableName, tableProperties);
-        }
-    }
-
-    @Override
-    public boolean supportsReportingWrittenBytes(ConnectorSession session, ConnectorTableHandle connectorTableHandle)
-    {
-        Span span = startSpan("supportsReportingWrittenBytes", connectorTableHandle);
-        try (var ignored = scopedSpan(span)) {
-            return delegate.supportsReportingWrittenBytes(session, connectorTableHandle);
-        }
-    }
-
-    @Override
     public OptionalInt getMaxWriterTasks(ConnectorSession session)
     {
         Span span = startSpan("getMaxWriterTasks");
         try (var ignored = scopedSpan(span)) {
             return delegate.getMaxWriterTasks(session);
+        }
+    }
+
+    @Override
+    public WriterScalingOptions getNewTableWriterScalingOptions(ConnectorSession session, SchemaTableName tableName, Map<String, Object> tableProperties)
+    {
+        Span span = startSpan("getNewTableWriterScalingOptions", tableName);
+        try (var ignored = scopedSpan(span)) {
+            return delegate.getNewTableWriterScalingOptions(session, tableName, tableProperties);
+        }
+    }
+
+    @Override
+    public WriterScalingOptions getInsertWriterScalingOptions(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        Span span = startSpan("getInsertWriterScalingOptions", tableHandle);
+        try (var ignored = scopedSpan(span)) {
+            return delegate.getInsertWriterScalingOptions(session, tableHandle);
         }
     }
 
@@ -1243,7 +1392,7 @@ public class TracingConnectorMetadata
     private Span startSpan(String methodName, Optional<String> schemaName)
     {
         return startSpan(methodName)
-                .setAllAttributes(attribute(TrinoAttributes.SCHEMA, schemaName));
+                .setAttribute(TrinoAttributes.SCHEMA, schemaName.orElse(null));
     }
 
     private Span startSpan(String methodName, SchemaTableName table)
@@ -1256,8 +1405,8 @@ public class TracingConnectorMetadata
     private Span startSpan(String methodName, SchemaTablePrefix prefix)
     {
         return startSpan(methodName)
-                .setAllAttributes(attribute(TrinoAttributes.SCHEMA, prefix.getSchema()))
-                .setAllAttributes(attribute(TrinoAttributes.TABLE, prefix.getTable()));
+                .setAttribute(TrinoAttributes.SCHEMA, prefix.getSchema().orElse(null))
+                .setAttribute(TrinoAttributes.TABLE, prefix.getTable().orElse(null));
     }
 
     private Span startSpan(String methodName, ConnectorTableHandle handle)

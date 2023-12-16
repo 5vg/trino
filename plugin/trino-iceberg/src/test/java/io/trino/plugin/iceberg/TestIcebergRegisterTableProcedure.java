@@ -13,39 +13,59 @@
  */
 package io.trino.plugin.iceberg;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.trino.filesystem.FileEntry;
 import io.trino.filesystem.FileIterator;
 import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystem;
 import io.trino.plugin.hive.metastore.HiveMetastore;
+import io.trino.plugin.iceberg.catalog.file.TestingIcebergFileMetastoreCatalogModule;
+import io.trino.plugin.tpch.TpchPlugin;
 import io.trino.testing.AbstractTestQueryFramework;
+import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
-import org.testng.annotations.DataProvider;
-import org.testng.annotations.Test;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.iceberg.DataFile;
+import org.apache.iceberg.DataFiles;
+import org.apache.iceberg.FileFormat;
+import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.Schema;
+import org.apache.iceberg.SortOrder;
+import org.apache.iceberg.Table;
+import org.apache.iceberg.hadoop.HadoopTables;
+import org.apache.iceberg.types.Types;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Stream;
 
 import static com.google.common.base.Verify.verify;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
+import static com.google.inject.util.Modules.EMPTY_MODULE;
+import static io.trino.plugin.hive.HiveTestUtils.HDFS_FILE_SYSTEM_FACTORY;
 import static io.trino.plugin.hive.metastore.file.TestingFileHiveMetastore.createTestingFileHiveMetastore;
+import static io.trino.plugin.iceberg.IcebergQueryRunner.ICEBERG_CATALOG;
 import static io.trino.plugin.iceberg.IcebergTestUtils.getFileSystemFactory;
 import static io.trino.plugin.iceberg.IcebergUtil.METADATA_FOLDER_NAME;
 import static io.trino.plugin.iceberg.procedure.RegisterTableProcedure.getLatestMetadataLocation;
 import static io.trino.testing.TestingConnectorSession.SESSION;
 import static io.trino.testing.TestingNames.randomNameSuffix;
+import static io.trino.testing.TestingSession.testSessionBuilder;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
+import static org.apache.iceberg.Files.localInput;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestIcebergRegisterTableProcedure
@@ -61,35 +81,43 @@ public class TestIcebergRegisterTableProcedure
     {
         metastoreDir = Files.createTempDirectory("test_iceberg_register_table").toFile();
         metastoreDir.deleteOnExit();
-        metastore = createTestingFileHiveMetastore(metastoreDir);
-        return IcebergQueryRunner.builder()
-                .setMetastoreDirectory(metastoreDir)
-                .setIcebergProperties(ImmutableMap.of("iceberg.register-table-procedure.enabled", "true"))
-                .build();
+        metastore = createTestingFileHiveMetastore(HDFS_FILE_SYSTEM_FACTORY, Location.of(metastoreDir.getAbsolutePath()));
+
+        // TODO: convert to IcebergQueryRunner when there is a replacement for HadoopTables that works with TrinoFileSystem
+        DistributedQueryRunner queryRunner = DistributedQueryRunner.builder(testSessionBuilder()
+                .setCatalog(ICEBERG_CATALOG)
+                .setSchema("tpch")
+                .build()).build();
+
+        queryRunner.installPlugin(new TpchPlugin());
+        queryRunner.createCatalog("tpch", "tpch");
+
+        Path dataDir = queryRunner.getCoordinator().getBaseDataDir().resolve("iceberg_data");
+        queryRunner.installPlugin(new TestingIcebergPlugin(
+                dataDir,
+                Optional.of(new TestingIcebergFileMetastoreCatalogModule(metastore)),
+                Optional.empty(),
+                EMPTY_MODULE));
+        queryRunner.createCatalog(ICEBERG_CATALOG, "iceberg", ImmutableMap.of("iceberg.register-table-procedure.enabled", "true"));
+        queryRunner.execute("CREATE SCHEMA iceberg.tpch");
+        return queryRunner;
     }
 
-    @BeforeClass
+    @BeforeAll
     public void initFileSystem()
     {
         fileSystem = getFileSystemFactory(getDistributedQueryRunner()).create(SESSION);
     }
 
-    @AfterClass(alwaysRun = true)
+    @AfterAll
     public void tearDown()
             throws IOException
     {
         deleteRecursively(metastoreDir.toPath(), ALLOW_INSECURE);
     }
 
-    @DataProvider
-    public static Object[][] fileFormats()
-    {
-        return Stream.of(IcebergFileFormat.values())
-                .map(icebergFileFormat -> new Object[] {icebergFileFormat})
-                .toArray(Object[][]::new);
-    }
-
-    @Test(dataProvider = "fileFormats")
+    @ParameterizedTest
+    @EnumSource(IcebergFileFormat.class)
     public void testRegisterTableWithTableLocation(IcebergFileFormat icebergFileFormat)
     {
         String tableName = "test_register_table_with_table_location_" + icebergFileFormat.name().toLowerCase(ENGLISH) + "_" + randomNameSuffix();
@@ -111,7 +139,8 @@ public class TestIcebergRegisterTableProcedure
         assertUpdate(format("DROP TABLE %s", tableName));
     }
 
-    @Test(dataProvider = "fileFormats")
+    @ParameterizedTest
+    @EnumSource(IcebergFileFormat.class)
     public void testRegisterPartitionedTable(IcebergFileFormat icebergFileFormat)
     {
         String tableName = "test_register_partitioned_table_" + icebergFileFormat.name().toLowerCase(ENGLISH) + "_" + randomNameSuffix();
@@ -133,7 +162,8 @@ public class TestIcebergRegisterTableProcedure
         assertUpdate("DROP TABLE " + tableName);
     }
 
-    @Test(dataProvider = "fileFormats")
+    @ParameterizedTest
+    @EnumSource(IcebergFileFormat.class)
     public void testRegisterTableWithComments(IcebergFileFormat icebergFileFormat)
     {
         String tableName = "test_register_table_with_comments_" + icebergFileFormat.name().toLowerCase(ENGLISH) + "_" + randomNameSuffix();
@@ -159,7 +189,8 @@ public class TestIcebergRegisterTableProcedure
         assertUpdate(format("DROP TABLE %s", tableName));
     }
 
-    @Test(dataProvider = "fileFormats")
+    @ParameterizedTest
+    @EnumSource(IcebergFileFormat.class)
     public void testRegisterTableWithShowCreateTable(IcebergFileFormat icebergFileFormat)
     {
         String tableName = "test_register_table_with_show_create_table_" + icebergFileFormat.name().toLowerCase(ENGLISH) + "_" + randomNameSuffix();
@@ -179,7 +210,8 @@ public class TestIcebergRegisterTableProcedure
         assertUpdate(format("DROP TABLE %s", tableName));
     }
 
-    @Test(dataProvider = "fileFormats")
+    @ParameterizedTest
+    @EnumSource(IcebergFileFormat.class)
     public void testRegisterTableWithReInsert(IcebergFileFormat icebergFileFormat)
     {
         String tableName = "test_register_table_with_re_insert_" + icebergFileFormat.name().toLowerCase(ENGLISH) + "_" + randomNameSuffix();
@@ -203,7 +235,8 @@ public class TestIcebergRegisterTableProcedure
         assertUpdate(format("DROP TABLE %s", tableName));
     }
 
-    @Test(dataProvider = "fileFormats")
+    @ParameterizedTest
+    @EnumSource(IcebergFileFormat.class)
     public void testRegisterTableWithDroppedTable(IcebergFileFormat icebergFileFormat)
     {
         String tableName = "test_register_table_with_dropped_table_" + icebergFileFormat.name().toLowerCase(ENGLISH) + "_" + randomNameSuffix();
@@ -221,7 +254,8 @@ public class TestIcebergRegisterTableProcedure
                 ".*No versioned metadata file exists at location.*");
     }
 
-    @Test(dataProvider = "fileFormats")
+    @ParameterizedTest
+    @EnumSource(IcebergFileFormat.class)
     public void testRegisterTableWithDifferentTableName(IcebergFileFormat icebergFileFormat)
     {
         String tableName = "test_register_table_with_different_table_name_old_" + icebergFileFormat.name().toLowerCase(ENGLISH) + "_" + randomNameSuffix();
@@ -246,7 +280,8 @@ public class TestIcebergRegisterTableProcedure
         assertUpdate(format("DROP TABLE %s", tableNameNew));
     }
 
-    @Test(dataProvider = "fileFormats")
+    @ParameterizedTest
+    @EnumSource(IcebergFileFormat.class)
     public void testRegisterTableWithMetadataFile(IcebergFileFormat icebergFileFormat)
     {
         String tableName = "test_register_table_with_metadata_file_" + icebergFileFormat.name().toLowerCase(ENGLISH) + "_" + randomNameSuffix();
@@ -423,6 +458,62 @@ public class TestIcebergRegisterTableProcedure
             assertQueryFails("CALL iceberg.system.register_table (CURRENT_SCHEMA, '" + tableName + "', '" + tableLocation + "', '" + invalidMetadataFileName + "')",
                     ".*is not a valid metadata file.*");
         }
+    }
+
+    @Test
+    public void testRegisterHadoopTableAndRead()
+    {
+        // create a temporary table to generate data file
+        String tempTableName = "temp_table_" + randomNameSuffix();
+        assertUpdate("CREATE TABLE " + tempTableName + " (id INT, name VARCHAR) WITH (format = 'ORC')");
+        assertUpdate("INSERT INTO " + tempTableName + " values(1, 'INDIA')", 1);
+        String dataFilePath = (String) computeScalar("SELECT \"$path\" FROM " + tempTableName);
+
+        // create hadoop table
+        String hadoopTableName = "hadoop_table_" + randomNameSuffix();
+        String hadoopTableLocation = metastoreDir.getPath() + "/" + hadoopTableName;
+        HadoopTables hadoopTables = new HadoopTables(new Configuration(false));
+        Schema schema = new Schema(ImmutableList.of(
+                Types.NestedField.optional(1, "id", Types.IntegerType.get()),
+                Types.NestedField.optional(2, "name", Types.StringType.get())));
+        Table table = hadoopTables.create(
+                schema,
+                PartitionSpec.unpartitioned(),
+                SortOrder.unsorted(),
+                ImmutableMap.of("write.format.default", "ORC"),
+                hadoopTableLocation);
+
+        // append data file to hadoop table
+        DataFile dataFile =
+                DataFiles.builder(PartitionSpec.unpartitioned())
+                        .withFormat(FileFormat.ORC)
+                        .withInputFile(localInput(new File(dataFilePath)))
+                        .withPath(dataFilePath)
+                        .withRecordCount(1)
+                        .build();
+        table.newFastAppend()
+                .appendFile(dataFile)
+                .commit();
+
+        // Hadoop style version number
+        assertThat(Location.of(getLatestMetadataLocation(fileSystem, hadoopTableLocation)).fileName())
+                .isEqualTo("v2.metadata.json");
+
+        // Try registering hadoop table in Trino and read it
+        String registeredTableName = "registered_table_" + randomNameSuffix();
+        assertUpdate("CALL system.register_table(CURRENT_SCHEMA, '%s', '%s')".formatted(registeredTableName, hadoopTableLocation));
+        assertQuery("SELECT * FROM " + registeredTableName, "VALUES (1, 'INDIA')");
+
+        // Verify the table can be written to despite using non-standard metadata file name
+        assertUpdate("INSERT INTO " + registeredTableName + " VALUES (2, 'POLAND')", 1);
+        assertQuery("SELECT * FROM " + registeredTableName, "VALUES (1, 'INDIA'), (2, 'POLAND')");
+
+        // New metadata file is written using standard file name convention
+        assertThat(Location.of(getLatestMetadataLocation(fileSystem, hadoopTableLocation)).fileName())
+                .matches("00003-.*\\.metadata\\.json");
+
+        assertUpdate("DROP TABLE " + registeredTableName);
+        assertUpdate("DROP TABLE " + tempTableName);
     }
 
     private String getTableLocation(String tableName)

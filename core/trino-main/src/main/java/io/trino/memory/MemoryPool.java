@@ -17,21 +17,21 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.AbstractFuture;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import io.airlift.units.DataSize;
 import io.trino.execution.TaskId;
 import io.trino.spi.QueryId;
 import io.trino.spi.memory.MemoryAllocation;
 import io.trino.spi.memory.MemoryPoolInfo;
+import jakarta.annotation.Nullable;
 import org.weakref.jmx.Managed;
-
-import javax.annotation.Nullable;
-import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -54,9 +54,9 @@ public class MemoryPool
     @GuardedBy("this")
     private NonCancellableMemoryFuture<Void> future;
 
-    @GuardedBy("this")
     // TODO: It would be better if we just tracked QueryContexts, but their lifecycle is managed by a weak reference, so we can't do that
-    private final Map<QueryId, Long> queryMemoryReservations = new HashMap<>();
+    // It is guarded for updates by this, but can be read without holding a lock
+    private final Map<QueryId, Long> queryMemoryReservations = new ConcurrentHashMap<>();
 
     // This map keeps track of all the tagged allocations, e.g., query-1 -> ['TableScanOperator': 10MB, 'LazyOutputBuffer': 5MB, ...]
     @GuardedBy("this")
@@ -348,7 +348,7 @@ public class MemoryPool
         return reservedRevocableBytes;
     }
 
-    synchronized long getQueryMemoryReservation(QueryId queryId)
+    long getQueryMemoryReservation(QueryId queryId)
     {
         return queryMemoryReservations.getOrDefault(queryId, 0L);
     }

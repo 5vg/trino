@@ -25,9 +25,8 @@ import io.airlift.units.Duration;
 import io.airlift.units.MaxDataSize;
 import io.airlift.units.MinDataSize;
 import io.airlift.units.MinDuration;
-
-import javax.validation.constraints.Min;
-import javax.validation.constraints.NotNull;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
 
 import java.io.File;
 import java.util.List;
@@ -601,6 +600,7 @@ public class HiveS3Config
     }
 
     @Config("hive.s3.proxy.password")
+    @ConfigSecuritySensitive
     public HiveS3Config setS3ProxyPassword(String s3proxyPassword)
     {
         this.s3proxyPassword = s3proxyPassword;

@@ -27,12 +27,12 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import static io.trino.tempto.assertions.QueryAssert.Row.row;
-import static io.trino.tempto.assertions.QueryAssert.assertThat;
 import static io.trino.tests.product.TestGroups.HIVE_VIEWS;
 import static io.trino.tests.product.utils.HadoopTestUtils.RETRYABLE_FAILURES_ISSUES;
 import static io.trino.tests.product.utils.HadoopTestUtils.RETRYABLE_FAILURES_MATCH;
 import static io.trino.tests.product.utils.QueryExecutors.onHive;
 import static io.trino.tests.product.utils.QueryExecutors.onTrino;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Requires({
@@ -72,12 +72,10 @@ public class TestHiveViewsLegacy
         onTrino().executeQuery("CREATE TABLE test_schema.trino_table(a int)");
         onTrino().executeQuery("CREATE VIEW test_schema.trino_test_view AS SELECT * FROM nation");
 
-        boolean hiveWithTableNamesByType = getHiveVersionMajor() >= 3 ||
-                (getHiveVersionMajor() == 2 && getHiveVersionMinor() >= 3);
         assertThat(onTrino().executeQuery("SELECT * FROM information_schema.tables WHERE table_schema = 'test_schema'")).containsOnly(
                 row("hive", "test_schema", "trino_table", "BASE TABLE"),
                 row("hive", "test_schema", "hive_table", "BASE TABLE"),
-                row("hive", "test_schema", "hive_test_view", hiveWithTableNamesByType ? "VIEW" : "BASE TABLE"),
+                row("hive", "test_schema", "hive_test_view", "VIEW"),
                 row("hive", "test_schema", "trino_test_view", "VIEW"));
 
         assertThat(onTrino().executeQuery("SELECT view_definition FROM information_schema.views WHERE table_schema = 'test_schema' and table_name = 'hive_test_view'")).containsOnly(

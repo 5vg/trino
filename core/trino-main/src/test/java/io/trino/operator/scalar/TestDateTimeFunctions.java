@@ -25,6 +25,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.parallel.Execution;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -45,9 +46,10 @@ import static java.util.concurrent.TimeUnit.HOURS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.TestInstance.Lifecycle.PER_CLASS;
-import static org.testng.Assert.assertEquals;
+import static org.junit.jupiter.api.parallel.ExecutionMode.CONCURRENT;
 
 @TestInstance(PER_CLASS)
+@Execution(CONCURRENT)
 public class TestDateTimeFunctions
 {
     private QueryAssertions assertions;
@@ -112,7 +114,7 @@ public class TestDateTimeFunctions
                 .setTimeZoneKey(timeZoneKey)
                 .build();
         long dateTimeCalculation = currentDate(connectorSession);
-        assertEquals(dateTimeCalculation, expectedDays);
+        assertThat(dateTimeCalculation).isEqualTo(expectedDays);
     }
 
     private static long epochDaysInZone(TimeZoneKey timeZoneKey, Instant instant)
@@ -204,13 +206,13 @@ public class TestDateTimeFunctions
                 .matches("TIMESTAMP '2001-01-22 15:14:05.000 +01:10'");
 
         // test invalid minute offsets
-        assertTrinoExceptionThrownBy(() -> assertions.function("from_unixtime", "0", "1", "10000").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("from_unixtime", "0", "1", "10000")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("from_unixtime", "0", "10000", "0").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("from_unixtime", "0", "10000", "0")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("from_unixtime", "0", "-100", "100").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("from_unixtime", "0", "-100", "100")::evaluate)
                 .hasErrorCode(INVALID_FUNCTION_ARGUMENT);
     }
 
@@ -786,22 +788,22 @@ public class TestDateTimeFunctions
                 .hasType(VARCHAR)
                 .isEqualTo("0");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_format", "DATE '2001-01-09'", "'%D'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_format", "DATE '2001-01-09'", "'%D'")::evaluate)
                 .hasMessage("%D not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_format", "DATE '2001-01-09'", "'%U'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_format", "DATE '2001-01-09'", "'%U'")::evaluate)
                 .hasMessage("%U not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_format", "DATE '2001-01-09'", "'%u'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_format", "DATE '2001-01-09'", "'%u'")::evaluate)
                 .hasMessage("%u not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_format", "DATE '2001-01-09'", "'%V'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_format", "DATE '2001-01-09'", "'%V'")::evaluate)
                 .hasMessage("%V not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_format", "DATE '2001-01-09'", "'%w'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_format", "DATE '2001-01-09'", "'%w'")::evaluate)
                 .hasMessage("%w not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_format", "DATE '2001-01-09'", "'%X'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_format", "DATE '2001-01-09'", "'%X'")::evaluate)
                 .hasMessage("%X not supported in date format string");
     }
 
@@ -865,28 +867,28 @@ public class TestDateTimeFunctions
         assertThat(assertions.function("date_parse", "'31-MAY-69 04.59.59.999000 AM'", "'%d-%b-%y %l.%i.%s.%f %p'"))
                 .matches("TIMESTAMP '2069-05-31 04:59:59.999'");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_parse", "''", "'%D'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_parse", "''", "'%D'")::evaluate)
                 .hasMessage("%D not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_parse", "''", "'%U'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_parse", "''", "'%U'")::evaluate)
                 .hasMessage("%U not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_parse", "''", "'%u'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_parse", "''", "'%u'")::evaluate)
                 .hasMessage("%u not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_parse", "''", "'%V'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_parse", "''", "'%V'")::evaluate)
                 .hasMessage("%V not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_parse", "''", "'%w'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_parse", "''", "'%w'")::evaluate)
                 .hasMessage("%w not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_parse", "''", "'%X'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_parse", "''", "'%X'")::evaluate)
                 .hasMessage("%X not supported in date format string");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_parse", "'3.0123456789'", "'%s.%f'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_parse", "'3.0123456789'", "'%s.%f'")::evaluate)
                 .hasMessage("Invalid format: \"3.0123456789\" is malformed at \"9\"");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("date_parse", "'1970-01-01'", "''").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("date_parse", "'1970-01-01'", "''")::evaluate)
                 .hasMessage("Both printing and parsing not supported");
     }
 
@@ -1063,13 +1065,13 @@ public class TestDateTimeFunctions
                 .isEqualTo(new SqlIntervalDayTime(1234, 13, 36, 28, 800));
 
         // invalid function calls
-        assertTrinoExceptionThrownBy(() -> assertions.function("parse_duration", "''").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("parse_duration", "''")::evaluate)
                 .hasMessage("duration is empty");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("parse_duration", "'1f'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("parse_duration", "'1f'")::evaluate)
                 .hasMessage("Unknown time unit: f");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("parse_duration", "'abc'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("parse_duration", "'abc'")::evaluate)
                 .hasMessage("duration is not a valid data duration string: abc");
     }
 
@@ -1119,7 +1121,7 @@ public class TestDateTimeFunctions
         assertThat(assertions.function("with_timezone", "TIMESTAMP '2001-12-01 03:04:05.321'", "'America/Los_Angeles'"))
                 .matches("TIMESTAMP '2001-12-01 03:04:05.321 America/Los_Angeles'");
 
-        assertTrinoExceptionThrownBy(() -> assertions.function("with_timezone", "TIMESTAMP '2001-08-22 03:04:05.321'", "'invalidzoneid'").evaluate())
+        assertTrinoExceptionThrownBy(assertions.function("with_timezone", "TIMESTAMP '2001-08-22 03:04:05.321'", "'invalidzoneid'")::evaluate)
                 .hasMessage("'invalidzoneid' is not a valid time zone");
     }
 }

@@ -14,15 +14,14 @@
 package io.trino.connector;
 
 import com.google.common.collect.ImmutableList;
+import com.google.errorprone.annotations.ThreadSafe;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.Inject;
 import io.airlift.log.Logger;
 import io.trino.Session;
 import io.trino.connector.system.GlobalSystemConnector;
 import io.trino.spi.connector.CatalogHandle;
-
-import javax.annotation.PreDestroy;
-import javax.annotation.concurrent.GuardedBy;
-import javax.annotation.concurrent.ThreadSafe;
+import jakarta.annotation.PreDestroy;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -102,7 +101,7 @@ public class WorkerDynamicCatalogManager
                 checkArgument(!catalog.getCatalogHandle().equals(GlobalSystemConnector.CATALOG_HANDLE), "Global system catalog not registered");
                 CatalogConnector newCatalog = catalogFactory.createCatalog(catalog);
                 catalogs.put(catalog.getCatalogHandle(), newCatalog);
-                log.info("Added catalog: " + catalog.getCatalogHandle());
+                log.debug("Added catalog: " + catalog.getCatalogHandle());
             }
         }
         finally {
@@ -143,7 +142,7 @@ public class WorkerDynamicCatalogManager
         }
         if (!removedCatalogs.isEmpty()) {
             List<String> sortedHandles = removedCatalogs.stream().map(connector -> connector.getCatalogHandle().toString()).sorted().toList();
-            log.info("Pruned catalogs: %s", sortedHandles);
+            log.debug("Pruned catalogs: %s", sortedHandles);
         }
     }
 

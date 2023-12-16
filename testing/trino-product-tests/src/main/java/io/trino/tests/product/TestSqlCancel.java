@@ -28,7 +28,6 @@ import io.trino.tempto.AfterMethodWithContext;
 import io.trino.tempto.BeforeMethodWithContext;
 import io.trino.tempto.ProductTest;
 import io.trino.tempto.query.QueryResult;
-import org.assertj.core.api.Assertions;
 import org.testng.annotations.Test;
 
 import java.io.Closeable;
@@ -44,7 +43,6 @@ import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.http.client.Request.Builder.prepareDelete;
 import static io.airlift.http.client.ResponseHandlerUtils.propagate;
 import static io.trino.tempto.assertions.QueryAssert.assertQueryFailure;
-import static io.trino.tempto.assertions.QueryAssert.assertThat;
 import static io.trino.tests.product.TestGroups.CANCEL_QUERY;
 import static io.trino.tests.product.utils.QueryExecutors.onTrino;
 import static java.lang.String.format;
@@ -53,7 +51,8 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newSingleThreadExecutor;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.testng.Assert.fail;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Fail.fail;
 
 public class TestSqlCancel
         extends ProductTest
@@ -132,7 +131,7 @@ public class TestSqlCancel
             throw e;
         }
         catch (ExecutionException expected) {
-            Assertions.assertThat(expected.getCause())
+            assertThat(expected.getCause())
                     .hasMessageEndingWith("Query was canceled");
         }
     }
@@ -148,7 +147,7 @@ public class TestSqlCancel
             if (queryResult.getRowsCount() == 1) {
                 String queryId = (String) queryResult.getOnlyValue();
                 Response response = queryCanceller.cancel(queryId);
-                Assertions.assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT.code());
+                assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT.code());
                 return;
             }
             MILLISECONDS.sleep(100L);

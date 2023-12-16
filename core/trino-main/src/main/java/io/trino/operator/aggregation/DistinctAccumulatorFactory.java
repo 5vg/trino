@@ -15,24 +15,22 @@ package io.trino.operator.aggregation;
 
 import com.google.common.collect.ImmutableList;
 import io.trino.Session;
-import io.trino.operator.GroupByIdBlock;
 import io.trino.operator.MarkDistinctHash;
 import io.trino.operator.UpdateMemory;
 import io.trino.operator.Work;
 import io.trino.spi.Page;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockBuilder;
+import io.trino.spi.block.IntArrayBlock;
 import io.trino.spi.type.Type;
 import io.trino.sql.gen.JoinCompiler;
-import io.trino.type.BlockTypeOperators;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
-import java.util.stream.IntStream;
 
 import static com.google.common.base.Preconditions.checkState;
-import static io.trino.spi.type.BigintType.BIGINT;
+import static io.trino.spi.type.IntegerType.INTEGER;
 import static java.util.Objects.requireNonNull;
 
 public class DistinctAccumulatorFactory
@@ -41,20 +39,17 @@ public class DistinctAccumulatorFactory
     private final AccumulatorFactory delegate;
     private final List<Type> argumentTypes;
     private final JoinCompiler joinCompiler;
-    private final BlockTypeOperators blockTypeOperators;
     private final Session session;
 
     public DistinctAccumulatorFactory(
             AccumulatorFactory delegate,
             List<Type> argumentTypes,
             JoinCompiler joinCompiler,
-            BlockTypeOperators blockTypeOperators,
             Session session)
     {
         this.delegate = requireNonNull(delegate, "delegate is null");
         this.argumentTypes = ImmutableList.copyOf(requireNonNull(argumentTypes, "argumentTypes is null"));
         this.joinCompiler = requireNonNull(joinCompiler, "joinCompiler is null");
-        this.blockTypeOperators = requireNonNull(blockTypeOperators, "blockTypeOperators is null");
         this.session = requireNonNull(session, "session is null");
     }
 
@@ -71,8 +66,7 @@ public class DistinctAccumulatorFactory
                 delegate.createAccumulator(lambdaProviders),
                 argumentTypes,
                 session,
-                joinCompiler,
-                blockTypeOperators);
+                joinCompiler);
     }
 
     @Override
@@ -88,8 +82,7 @@ public class DistinctAccumulatorFactory
                 delegate.createGroupedAccumulator(lambdaProviders),
                 argumentTypes,
                 session,
-                joinCompiler,
-                blockTypeOperators);
+                joinCompiler);
     }
 
     @Override
@@ -114,17 +107,14 @@ public class DistinctAccumulatorFactory
                 Accumulator accumulator,
                 List<Type> inputTypes,
                 Session session,
-                JoinCompiler joinCompiler,
-                BlockTypeOperators blockTypeOperators)
+                JoinCompiler joinCompiler)
         {
             this.accumulator = requireNonNull(accumulator, "accumulator is null");
             this.hash = new MarkDistinctHash(
                     session,
                     inputTypes,
-                    IntStream.range(0, inputTypes.size()).toArray(),
-                    Optional.empty(),
+                    false,
                     joinCompiler,
-                    blockTypeOperators,
                     UpdateMemory.NOOP);
         }
 
@@ -191,20 +181,17 @@ public class DistinctAccumulatorFactory
                 GroupedAccumulator accumulator,
                 List<Type> inputTypes,
                 Session session,
-                JoinCompiler joinCompiler,
-                BlockTypeOperators blockTypeOperators)
+                JoinCompiler joinCompiler)
         {
             this.accumulator = requireNonNull(accumulator, "accumulator is null");
             this.hash = new MarkDistinctHash(
                     session,
                     ImmutableList.<Type>builder()
-                            .add(BIGINT) // group id column
+                            .add(INTEGER) // group id column
                             .addAll(inputTypes)
                             .build(),
-                    IntStream.range(0, inputTypes.size() + 1).toArray(),
-                    Optional.empty(),
+                    false,
                     joinCompiler,
-                    blockTypeOperators,
                     UpdateMemory.NOOP);
         }
 
@@ -221,40 +208,44 @@ public class DistinctAccumulatorFactory
         }
 
         @Override
-        public void addInput(GroupByIdBlock groupIdsBlock, Page page, AggregationMask mask)
+        public void addInput(int[] groupIds, Page page, AggregationMask mask)
         {
-            Page withGroup = page.prependColumn(groupIdsBlock);
-
-            // 1. filter out positions based on mask, if present
-            Page filteredWithGroup = mask.filterPage(withGroup);
+            // 1. filter out positions based on mask
+            groupIds = maskGroupIds(groupIds, mask);
+            page = mask.filterPage(page);
 
             // 2. compute a mask for the distinct rows (including the group id)
-            Work<Block> work = hash.markDistinctRows(filteredWithGroup);
+            Work<Block> work = hash.markDistinctRows(page.prependColumn(new IntArrayBlock(page.getPositionCount(), Optional.empty(), groupIds)));
             checkState(work.process());
             Block distinctMask = work.getResult();
 
             // 3. update original mask to the new distinct mask block
-            mask.reset(filteredWithGroup.getPositionCount());
+            mask.reset(page.getPositionCount());
             mask.applyMaskBlock(distinctMask);
             if (mask.isSelectNone()) {
                 return;
             }
 
             // 4. feed a Page with a new mask to the underlying aggregation
-            GroupByIdBlock groupIds = new GroupByIdBlock(groupIdsBlock.getGroupCount(), filteredWithGroup.getBlock(0));
+            accumulator.addInput(groupIds, page, mask);
+        }
 
-            // drop the group id column and prepend the distinct mask column
-            int[] columnIndexes = new int[filteredWithGroup.getChannelCount() - 1];
-            for (int i = 0; i < columnIndexes.length; i++) {
-                columnIndexes[i] = i + 1;
+        private static int[] maskGroupIds(int[] groupIds, AggregationMask mask)
+        {
+            if (mask.isSelectAll() || mask.isSelectNone()) {
+                return groupIds;
             }
-            Page filtered = filteredWithGroup.getColumns(columnIndexes);
-            // NOTE: the accumulator must be called even if the filtered page is empty to inform the accumulator about the group count
-            accumulator.addInput(groupIds, filtered, mask);
+
+            int[] newGroupIds = new int[mask.getSelectedPositionCount()];
+            int[] selectedPositions = mask.getSelectedPositions();
+            for (int i = 0; i < newGroupIds.length; i++) {
+                newGroupIds[i] = groupIds[selectedPositions[i]];
+            }
+            return newGroupIds;
         }
 
         @Override
-        public void addIntermediate(GroupByIdBlock groupIdsBlock, Block block)
+        public void addIntermediate(int[] groupIds, Block block)
         {
             throw new UnsupportedOperationException();
         }

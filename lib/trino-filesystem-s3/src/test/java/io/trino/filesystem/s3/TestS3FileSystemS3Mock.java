@@ -15,7 +15,7 @@ package io.trino.filesystem.s3;
 
 import com.adobe.testing.s3mock.testcontainers.S3MockContainer;
 import io.airlift.units.DataSize;
-import org.junit.jupiter.api.Test;
+import io.opentelemetry.api.OpenTelemetry;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -25,8 +25,6 @@ import software.amazon.awssdk.services.s3.S3Client;
 
 import java.net.URI;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-
 @Testcontainers
 public class TestS3FileSystemS3Mock
         extends AbstractTestS3FileSystem
@@ -34,7 +32,7 @@ public class TestS3FileSystemS3Mock
     private static final String BUCKET = "test-bucket";
 
     @Container
-    private static final S3MockContainer S3_MOCK = new S3MockContainer("2.11.0")
+    private static final S3MockContainer S3_MOCK = new S3MockContainer("3.0.1")
             .withInitialBuckets(BUCKET);
 
     @Override
@@ -58,20 +56,12 @@ public class TestS3FileSystemS3Mock
     @Override
     protected S3FileSystemFactory createS3FileSystemFactory()
     {
-        return new S3FileSystemFactory(new S3FileSystemConfig()
+        return new S3FileSystemFactory(OpenTelemetry.noop(), new S3FileSystemConfig()
                 .setAwsAccessKey("accesskey")
                 .setAwsSecretKey("secretkey")
                 .setEndpoint(S3_MOCK.getHttpEndpoint())
                 .setRegion(Region.US_EAST_1.id())
                 .setPathStyleAccess(true)
                 .setStreamingPartSize(DataSize.valueOf("5.5MB")));
-    }
-
-    // TODO: remove when fixed in S3Mock: https://github.com/adobe/S3Mock/pull/1131
-    @Override
-    @Test
-    public void testInputFile()
-    {
-        assertThatThrownBy(super::testInputFile).isInstanceOf(AssertionError.class);
     }
 }

@@ -21,9 +21,8 @@ import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
 import io.airlift.configuration.ConfigSecuritySensitive;
 import io.airlift.configuration.validation.FileExists;
-
-import javax.annotation.PostConstruct;
-import javax.validation.constraints.NotNull;
+import jakarta.annotation.PostConstruct;
+import jakarta.validation.constraints.NotNull;
 
 import java.io.File;
 import java.net.URI;
@@ -144,7 +143,7 @@ public class BigQueryProxyConfig
             throw exception("BigQuery RPC proxy URI cannot specify path");
         }
 
-        if ((username.isPresent() && password.isEmpty())) {
+        if (username.isPresent() && password.isEmpty()) {
             throw exception("bigquery.rpc-proxy.username was set but bigquery.rpc-proxy.password is empty");
         }
 

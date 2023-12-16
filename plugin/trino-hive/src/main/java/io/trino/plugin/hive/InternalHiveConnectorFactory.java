@@ -25,14 +25,8 @@ import io.airlift.event.client.EventModule;
 import io.airlift.json.JsonModule;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Tracer;
+import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.filesystem.manager.FileSystemModule;
-import io.trino.hdfs.HdfsModule;
-import io.trino.hdfs.authentication.HdfsAuthenticationModule;
-import io.trino.hdfs.azure.HiveAzureModule;
-import io.trino.hdfs.cos.HiveCosModule;
-import io.trino.hdfs.gcs.HiveGcsModule;
-import io.trino.hdfs.rubix.RubixEnabledConfig;
-import io.trino.hdfs.rubix.RubixModule;
 import io.trino.plugin.base.CatalogName;
 import io.trino.plugin.base.CatalogNameModule;
 import io.trino.plugin.base.TypeDeserializerModule;
@@ -45,7 +39,6 @@ import io.trino.plugin.base.classloader.ClassLoaderSafeNodePartitioningProvider;
 import io.trino.plugin.base.jmx.ConnectorObjectNameGeneratorModule;
 import io.trino.plugin.base.jmx.MBeanServerModule;
 import io.trino.plugin.base.session.SessionPropertiesProvider;
-import io.trino.plugin.hive.aws.athena.PartitionProjectionModule;
 import io.trino.plugin.hive.fs.CachingDirectoryListerModule;
 import io.trino.plugin.hive.fs.DirectoryLister;
 import io.trino.plugin.hive.metastore.HiveMetastore;
@@ -68,6 +61,8 @@ import io.trino.spi.connector.ConnectorSplitManager;
 import io.trino.spi.connector.MetadataProvider;
 import io.trino.spi.connector.TableProcedureMetadata;
 import io.trino.spi.eventlistener.EventListener;
+import io.trino.spi.function.FunctionProvider;
+import io.trino.spi.function.table.ConnectorTableFunction;
 import io.trino.spi.procedure.Procedure;
 import org.weakref.jmx.guice.MBeanModule;
 
@@ -77,7 +72,6 @@ import java.util.Set;
 
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
-import static io.airlift.configuration.ConditionalModule.conditionalModule;
 import static java.util.Objects.requireNonNull;
 
 public final class InternalHiveConnectorFactory
@@ -86,7 +80,7 @@ public final class InternalHiveConnectorFactory
 
     public static Connector createConnector(String catalogName, Map<String, String> config, ConnectorContext context, Module module)
     {
-        return createConnector(catalogName, config, context, module, Optional.empty(), Optional.empty());
+        return createConnector(catalogName, config, context, module, Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     public static Connector createConnector(
@@ -95,6 +89,7 @@ public final class InternalHiveConnectorFactory
             ConnectorContext context,
             Module module,
             Optional<HiveMetastore> metastore,
+            Optional<TrinoFileSystemFactory> fileSystemFactory,
             Optional<DirectoryLister> directoryLister)
     {
         requireNonNull(config, "config is null");
@@ -109,17 +104,12 @@ public final class InternalHiveConnectorFactory
                     new JsonModule(),
                     new TypeDeserializerModule(context.getTypeManager()),
                     new HiveModule(),
-                    new PartitionProjectionModule(),
                     new CachingDirectoryListerModule(directoryLister),
-                    new HdfsModule(),
-                    new HiveGcsModule(),
-                    new HiveAzureModule(),
-                    new HiveCosModule(),
-                    conditionalModule(RubixEnabledConfig.class, RubixEnabledConfig::isCacheEnabled, new RubixModule()),
                     new HiveMetastoreModule(metastore),
                     new HiveSecurityModule(),
-                    new HdfsAuthenticationModule(),
-                    new FileSystemModule(),
+                    fileSystemFactory
+                            .map(factory -> (Module) binder -> binder.bind(TrinoFileSystemFactory.class).toInstance(factory))
+                            .orElseGet(() -> new FileSystemModule(catalogName, context.getNodeManager(), context.getOpenTelemetry())),
                     new HiveProcedureModule(),
                     new MBeanServerModule(),
                     binder -> {
@@ -165,6 +155,7 @@ public final class InternalHiveConnectorFactory
                     .map(accessControl -> new ClassLoaderSafeConnectorAccessControl(accessControl, classLoader));
 
             return new HiveConnector(
+                    injector,
                     lifeCycleManager,
                     transactionManager,
                     new ClassLoaderSafeConnectorSplitManager(splitManager, classLoader),
@@ -181,6 +172,8 @@ public final class InternalHiveConnectorFactory
                     hiveAnalyzeProperties.getAnalyzeProperties(),
                     hiveMaterializedViewPropertiesProvider.getMaterializedViewProperties(),
                     hiveAccessControl,
+                    injector.getInstance(Key.get(new TypeLiteral<Set<ConnectorTableFunction>>() {})),
+                    injector.getInstance(FunctionProvider.class),
                     injector.getInstance(HiveConfig.class).isSingleStatementWritesOnly(),
                     classLoader);
         }

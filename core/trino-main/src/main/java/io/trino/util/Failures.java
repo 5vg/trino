@@ -14,6 +14,7 @@
 package io.trino.util;
 
 import com.google.common.collect.ImmutableList;
+import com.google.errorprone.annotations.FormatMethod;
 import io.trino.client.ErrorLocation;
 import io.trino.execution.ExecutionFailureInfo;
 import io.trino.execution.Failure;
@@ -24,8 +25,7 @@ import io.trino.spi.StandardErrorCode;
 import io.trino.spi.TrinoException;
 import io.trino.spi.TrinoTransportException;
 import io.trino.sql.parser.ParsingException;
-
-import javax.annotation.Nullable;
+import jakarta.annotation.Nullable;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -58,6 +58,7 @@ public final class Failures
         return toFailure(failure, newIdentityHashSet());
     }
 
+    @FormatMethod
     public static void checkCondition(boolean condition, ErrorCodeSupplier errorCode, String formatString, Object... args)
     {
         if (!condition) {

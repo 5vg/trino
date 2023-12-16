@@ -19,27 +19,17 @@ import org.testng.annotations.Test;
 
 import static io.trino.tempto.assertions.QueryAssert.Row.row;
 import static io.trino.tempto.assertions.QueryAssert.assertQueryFailure;
-import static io.trino.tempto.assertions.QueryAssert.assertThat;
 import static io.trino.tests.product.TestGroups.STORAGE_FORMATS;
 import static io.trino.tests.product.utils.QueryExecutors.onHive;
 import static io.trino.tests.product.utils.QueryExecutors.onTrino;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestHiveMaterializedView
         extends HiveProductTest
 {
-    private boolean isTestEnabled()
-    {
-        // MATERIALIZED VIEW is supported since Hive 3
-        return getHiveVersionMajor() >= 3;
-    }
-
     @BeforeMethodWithContext
     public void setUp()
     {
-        if (!isTestEnabled()) {
-            return;
-        }
-
         onHive().executeQuery("" +
                 "CREATE TABLE test_materialized_view_table(x string) " +
                 "STORED AS ORC " +
@@ -50,10 +40,6 @@ public class TestHiveMaterializedView
     @AfterMethodWithContext
     public void tearDown()
     {
-        if (!isTestEnabled()) {
-            return;
-        }
-
         onHive().executeQuery("DROP TABLE IF EXISTS test_materialized_view_table");
     }
 
@@ -71,10 +57,6 @@ public class TestHiveMaterializedView
 
     private void testMaterializedView(boolean partitioned)
     {
-        if (!isTestEnabled()) {
-            return;
-        }
-
         onHive().executeQuery("DROP MATERIALIZED VIEW test_materialized_view_view");
         onHive().executeQuery("" +
                 "CREATE MATERIALIZED VIEW test_materialized_view_view " +

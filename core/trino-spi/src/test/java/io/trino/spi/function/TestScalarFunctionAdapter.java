@@ -19,8 +19,12 @@ import com.google.common.primitives.Primitives;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.trino.spi.TrinoException;
+import io.trino.spi.block.ArrayBlock;
 import io.trino.spi.block.Block;
 import io.trino.spi.block.BlockBuilder;
+import io.trino.spi.block.Fixed12Block;
+import io.trino.spi.block.LongArrayBlock;
+import io.trino.spi.block.VariableWidthBlock;
 import io.trino.spi.function.InvocationConvention.InvocationArgumentConvention;
 import io.trino.spi.function.InvocationConvention.InvocationReturnConvention;
 import io.trino.spi.type.ArrayType;
@@ -28,13 +32,15 @@ import io.trino.spi.type.CharType;
 import io.trino.spi.type.LongTimestamp;
 import io.trino.spi.type.TimestampType;
 import io.trino.spi.type.Type;
-import org.testng.annotations.Test;
+import io.trino.spi.type.TypeOperators;
+import org.junit.jupiter.api.Test;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.BitSet;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -45,11 +51,18 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.trino.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.trino.spi.block.TestingSession.SESSION;
 import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.BLOCK_POSITION;
+import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.BLOCK_POSITION_NOT_NULL;
 import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.BOXED_NULLABLE;
+import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.FLAT;
 import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.IN_OUT;
 import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.NEVER_NULL;
 import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.NULL_FLAG;
+import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.VALUE_BLOCK_POSITION;
+import static io.trino.spi.function.InvocationConvention.InvocationArgumentConvention.VALUE_BLOCK_POSITION_NOT_NULL;
+import static io.trino.spi.function.InvocationConvention.InvocationReturnConvention.BLOCK_BUILDER;
 import static io.trino.spi.function.InvocationConvention.InvocationReturnConvention.FAIL_ON_NULL;
+import static io.trino.spi.function.InvocationConvention.InvocationReturnConvention.FLAT_RETURN;
+import static io.trino.spi.function.InvocationConvention.simpleConvention;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.CharType.createCharType;
@@ -61,17 +74,16 @@ import static java.lang.invoke.MethodHandles.lookup;
 import static java.lang.invoke.MethodType.methodType;
 import static java.util.Collections.nCopies;
 import static java.util.Objects.requireNonNull;
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertNull;
-import static org.testng.Assert.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestScalarFunctionAdapter
 {
+    private static final TypeOperators TYPE_OPERATORS = new TypeOperators();
     private static final ArrayType ARRAY_TYPE = new ArrayType(BIGINT);
     private static final CharType CHAR_TYPE = createCharType(7);
     private static final TimestampType TIMESTAMP_TYPE = createTimestampType(9);
-    private static final List<Type> ARGUMENT_TYPES = ImmutableList.of(BOOLEAN, BIGINT, DOUBLE, VARCHAR, ARRAY_TYPE);
+    private static final Type RETURN_TYPE = BOOLEAN;
+    private static final List<Type> ARGUMENT_TYPES = ImmutableList.of(DOUBLE, VARCHAR, ARRAY_TYPE);
     private static final List<Type> OBJECTS_ARGUMENT_TYPES = ImmutableList.of(VARCHAR, ARRAY_TYPE, CHAR_TYPE, TIMESTAMP_TYPE);
 
     @Test
@@ -83,8 +95,7 @@ public class TestScalarFunctionAdapter
                 FAIL_ON_NULL,
                 false,
                 true);
-        String methodName = "neverNull";
-        verifyAllAdaptations(actualConvention, methodName, ARGUMENT_TYPES);
+        verifyAllAdaptations(actualConvention, "neverNull", RETURN_TYPE, ARGUMENT_TYPES);
     }
 
     @Test
@@ -96,29 +107,178 @@ public class TestScalarFunctionAdapter
                 FAIL_ON_NULL,
                 false,
                 true);
-        String methodName = "neverNullObjects";
-        verifyAllAdaptations(actualConvention, methodName, OBJECTS_ARGUMENT_TYPES);
+        verifyAllAdaptations(actualConvention, "neverNullObjects", RETURN_TYPE, OBJECTS_ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromBoxedNull()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(ARGUMENT_TYPES.size(), BOXED_NULLABLE),
+                FAIL_ON_NULL,
+                false,
+                true);
+        verifyAllAdaptations(actualConvention, "boxedNull", RETURN_TYPE, ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromBoxedNullObjects()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(OBJECTS_ARGUMENT_TYPES.size(), BOXED_NULLABLE),
+                FAIL_ON_NULL,
+                false,
+                true);
+        verifyAllAdaptations(actualConvention, "boxedNullObjects", RETURN_TYPE, OBJECTS_ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromNullFlag()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(ARGUMENT_TYPES.size(), NULL_FLAG),
+                FAIL_ON_NULL,
+                false,
+                true);
+        verifyAllAdaptations(actualConvention, "nullFlag", RETURN_TYPE, ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromNullFlagObjects()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(OBJECTS_ARGUMENT_TYPES.size(), NULL_FLAG),
+                FAIL_ON_NULL,
+                false,
+                true);
+        verifyAllAdaptations(actualConvention, "nullFlagObjects", RETURN_TYPE, OBJECTS_ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromBlockPosition()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(ARGUMENT_TYPES.size(), BLOCK_POSITION),
+                FAIL_ON_NULL,
+                false,
+                true);
+        verifyAllAdaptations(actualConvention, "blockPosition", RETURN_TYPE, ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromBlockPositionObjects()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(OBJECTS_ARGUMENT_TYPES.size(), BLOCK_POSITION),
+                FAIL_ON_NULL,
+                false,
+                true);
+        verifyAllAdaptations(actualConvention, "blockPositionObjects", RETURN_TYPE, OBJECTS_ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromBlockPositionNotNull()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(ARGUMENT_TYPES.size(), BLOCK_POSITION_NOT_NULL),
+                FAIL_ON_NULL,
+                false,
+                true);
+        verifyAllAdaptations(actualConvention, "blockPosition", RETURN_TYPE, ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromBlockPositionNotNullObjects()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(OBJECTS_ARGUMENT_TYPES.size(), BLOCK_POSITION_NOT_NULL),
+                FAIL_ON_NULL,
+                false,
+                true);
+        verifyAllAdaptations(actualConvention, "blockPositionObjects", RETURN_TYPE, OBJECTS_ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromValueBlockPosition()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(ARGUMENT_TYPES.size(), VALUE_BLOCK_POSITION),
+                FAIL_ON_NULL,
+                false,
+                true);
+        String methodName = "valueBlockPosition";
+        verifyAllAdaptations(actualConvention, methodName, RETURN_TYPE, ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromValueBlockPositionObjects()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(OBJECTS_ARGUMENT_TYPES.size(), VALUE_BLOCK_POSITION),
+                FAIL_ON_NULL,
+                false,
+                true);
+        String methodName = "valueBlockPositionObjects";
+        verifyAllAdaptations(actualConvention, methodName, RETURN_TYPE, OBJECTS_ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromValueBlockPositionNotNull()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(ARGUMENT_TYPES.size(), VALUE_BLOCK_POSITION_NOT_NULL),
+                FAIL_ON_NULL,
+                false,
+                true);
+        String methodName = "valueBlockPosition";
+        verifyAllAdaptations(actualConvention, methodName, RETURN_TYPE, ARGUMENT_TYPES);
+    }
+
+    @Test
+    public void testAdaptFromValueBlockPositionObjectsNotNull()
+            throws Throwable
+    {
+        InvocationConvention actualConvention = new InvocationConvention(
+                nCopies(OBJECTS_ARGUMENT_TYPES.size(), VALUE_BLOCK_POSITION_NOT_NULL),
+                FAIL_ON_NULL,
+                false,
+                true);
+        String methodName = "valueBlockPositionObjects";
+        verifyAllAdaptations(actualConvention, methodName, RETURN_TYPE, OBJECTS_ARGUMENT_TYPES);
     }
 
     private static void verifyAllAdaptations(
             InvocationConvention actualConvention,
             String methodName,
+            Type returnType,
             List<Type> argumentTypes)
             throws Throwable
     {
         MethodType type = methodType(actualConvention.getReturnConvention() == FAIL_ON_NULL ? boolean.class : Boolean.class, toCallArgumentTypes(actualConvention, argumentTypes));
         MethodHandle methodHandle = lookup().findVirtual(Target.class, methodName, type);
-        verifyAllAdaptations(actualConvention, methodHandle, argumentTypes);
+        verifyAllAdaptations(actualConvention, methodHandle, returnType, argumentTypes);
     }
 
     private static void verifyAllAdaptations(
             InvocationConvention actualConvention,
             MethodHandle methodHandle,
+            Type returnType,
             List<Type> argumentTypes)
             throws Throwable
     {
         List<List<InvocationArgumentConvention>> allArgumentConventions = allCombinations(
-                ImmutableList.of(NEVER_NULL, BOXED_NULLABLE, NULL_FLAG, BLOCK_POSITION, IN_OUT),
+                ImmutableList.of(NEVER_NULL, BLOCK_POSITION_NOT_NULL, VALUE_BLOCK_POSITION_NOT_NULL, BOXED_NULLABLE, NULL_FLAG, BLOCK_POSITION, VALUE_BLOCK_POSITION, FLAT, IN_OUT),
                 argumentTypes.size());
         for (List<InvocationArgumentConvention> argumentConventions : allArgumentConventions) {
             for (InvocationReturnConvention returnConvention : InvocationReturnConvention.values()) {
@@ -127,6 +287,7 @@ public class TestScalarFunctionAdapter
                         methodHandle,
                         actualConvention,
                         expectedConvention,
+                        returnType,
                         argumentTypes);
             }
         }
@@ -136,6 +297,7 @@ public class TestScalarFunctionAdapter
             MethodHandle methodHandle,
             InvocationConvention actualConvention,
             InvocationConvention expectedConvention,
+            Type returnType,
             List<Type> argumentTypes)
             throws Throwable
     {
@@ -143,16 +305,22 @@ public class TestScalarFunctionAdapter
         try {
             adaptedMethodHandle = ScalarFunctionAdapter.adapt(
                     methodHandle,
+                    returnType,
                     argumentTypes,
                     actualConvention,
                     expectedConvention);
-            assertTrue(ScalarFunctionAdapter.canAdapt(actualConvention, expectedConvention));
+            assertThat(ScalarFunctionAdapter.canAdapt(actualConvention, expectedConvention)).isTrue();
         }
         catch (IllegalArgumentException e) {
-            assertFalse(ScalarFunctionAdapter.canAdapt(actualConvention, expectedConvention));
-            assertTrue((expectedConvention.getReturnConvention() == FAIL_ON_NULL));
-            if (hasNullableToNoNullableAdaptation(actualConvention, expectedConvention)) {
-                return;
+            if (!ScalarFunctionAdapter.canAdapt(actualConvention, expectedConvention)) {
+                if (hasNullableToNoNullableAdaptation(actualConvention, expectedConvention)) {
+                    assertThat(expectedConvention.getReturnConvention() == FAIL_ON_NULL || expectedConvention.getReturnConvention() == FLAT_RETURN).isTrue();
+                    return;
+                }
+                if (actualConvention.getArgumentConventions().stream()
+                        .anyMatch(convention -> EnumSet.of(BLOCK_POSITION, BLOCK_POSITION_NOT_NULL, VALUE_BLOCK_POSITION, VALUE_BLOCK_POSITION_NOT_NULL).contains(convention))) {
+                    return;
+                }
             }
             throw new AssertionError("Adaptation failed but no illegal conversions found", e);
         }
@@ -166,7 +334,9 @@ public class TestScalarFunctionAdapter
         // crete an exact invoker to the handle, so we can use object invoke interface without type coercion concerns
         MethodHandle exactInvoker = MethodHandles.exactInvoker(adaptedMethodHandle.type())
                 .bindTo(adaptedMethodHandle);
-        exactInvoker = MethodHandles.explicitCastArguments(exactInvoker, exactInvoker.type().changeReturnType(Boolean.class));
+        if (expectedConvention.getReturnConvention() != BLOCK_BUILDER) {
+            exactInvoker = MethodHandles.explicitCastArguments(exactInvoker, exactInvoker.type().changeReturnType(Boolean.class));
+        }
 
         // try all combinations of null and not null arguments
         for (int notNullMask = 0; notNullMask < (1 << actualConvention.getArgumentConventions().size()); notNullMask++) {
@@ -177,16 +347,30 @@ public class TestScalarFunctionAdapter
             Target target = new Target();
             List<Object> argumentValues = toCallArgumentValues(newCallingConvention, nullArguments, target, argumentTypes);
             try {
+                boolean expectNull = expectNullReturn(actualConvention, nullArguments);
+                if (expectedConvention.getReturnConvention() == BLOCK_BUILDER) {
+                    BlockBuilder blockBuilder = returnType.createBlockBuilder(null, 1);
+                    argumentValues.add(blockBuilder);
+                    exactInvoker.invokeWithArguments(argumentValues);
+                    Block result = blockBuilder.build();
+                    assertThat(result.getPositionCount()).isEqualTo(1);
+                    assertThat(result.isNull(0)).isEqualTo(expectNull);
+                    if (!expectNull) {
+                        assertThat(BOOLEAN.getBoolean(result, 0)).isTrue();
+                    }
+                    return;
+                }
+
                 Boolean result = (Boolean) exactInvoker.invokeWithArguments(argumentValues);
                 switch (expectedConvention.getReturnConvention()) {
-                    case FAIL_ON_NULL -> assertTrue(result);
-                    case DEFAULT_ON_NULL -> assertEquals(result, (Boolean) nullArguments.isEmpty());
-                    case NULLABLE_RETURN -> assertEquals(result, nullArguments.isEmpty() ? true : null);
+                    case FAIL_ON_NULL -> assertThat(result).isTrue();
+                    case DEFAULT_ON_NULL -> assertThat(result).isEqualTo((Boolean) !expectNull);
+                    case NULLABLE_RETURN -> assertThat(result).isEqualTo(!expectNull ? true : null);
                     default -> throw new UnsupportedOperationException();
                 }
             }
             catch (TrinoException trinoException) {
-                assertEquals(trinoException.getErrorCode(), INVALID_FUNCTION_ARGUMENT.toErrorCode());
+                assertThat(trinoException.getErrorCode()).isEqualTo(INVALID_FUNCTION_ARGUMENT.toErrorCode());
             }
             target.verify(actualConvention, nullArguments, argumentTypes);
         }
@@ -206,17 +390,35 @@ public class TestScalarFunctionAdapter
                 return true;
             }
         }
+        if (actualConvention.getReturnConvention() != expectedConvention.getReturnConvention()) {
+            if (expectedConvention.getReturnConvention() == FLAT_RETURN) {
+                // Flat return can not be adapted
+                return true;
+            }
+        }
         return false;
     }
 
     private static boolean canCallConventionWithNullArguments(InvocationConvention convention, BitSet nullArguments)
     {
         for (int i = 0; i < convention.getArgumentConventions().size(); i++) {
-            if (nullArguments.get(i) && convention.getArgumentConvention(i) == NEVER_NULL) {
+            InvocationArgumentConvention argumentConvention = convention.getArgumentConvention(i);
+            if (nullArguments.get(i) && EnumSet.of(NEVER_NULL, BLOCK_POSITION_NOT_NULL, VALUE_BLOCK_POSITION_NOT_NULL, FLAT).contains(argumentConvention)) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static boolean expectNullReturn(InvocationConvention convention, BitSet nullArguments)
+    {
+        for (int i = 0; i < convention.getArgumentConventions().size(); i++) {
+            InvocationArgumentConvention argumentConvention = convention.getArgumentConvention(i);
+            if (nullArguments.get(i) && !argumentConvention.isNullable()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static List<Class<?>> toCallArgumentTypes(InvocationConvention callingConvention, List<Type> argumentTypes)
@@ -236,8 +438,18 @@ public class TestScalarFunctionAdapter
                     expectedArguments.add(javaType);
                     expectedArguments.add(boolean.class);
                 }
-                case BLOCK_POSITION -> {
+                case BLOCK_POSITION_NOT_NULL, BLOCK_POSITION -> {
                     expectedArguments.add(Block.class);
+                    expectedArguments.add(int.class);
+                }
+                case VALUE_BLOCK_POSITION_NOT_NULL, VALUE_BLOCK_POSITION -> {
+                    expectedArguments.add(argumentType.getValueBlockType());
+                    expectedArguments.add(int.class);
+                }
+                case FLAT -> {
+                    expectedArguments.add(Slice.class);
+                    expectedArguments.add(int.class);
+                    expectedArguments.add(Slice.class);
                     expectedArguments.add(int.class);
                 }
                 case IN_OUT -> expectedArguments.add(InOut.class);
@@ -248,6 +460,7 @@ public class TestScalarFunctionAdapter
     }
 
     private static List<Object> toCallArgumentValues(InvocationConvention callingConvention, BitSet nullArguments, Target target, List<Type> argumentTypes)
+            throws Throwable
     {
         List<Object> callArguments = new ArrayList<>();
         callArguments.add(target);
@@ -274,13 +487,48 @@ public class TestScalarFunctionAdapter
                     callArguments.add(testValue == null ? Defaults.defaultValue(argumentType.getJavaType()) : testValue);
                     callArguments.add(testValue == null);
                 }
-                case BLOCK_POSITION -> {
+                case BLOCK_POSITION_NOT_NULL, VALUE_BLOCK_POSITION_NOT_NULL -> {
+                    verify(testValue != null, "null cannot be passed to a block positions not null argument");
                     BlockBuilder blockBuilder = argumentType.createBlockBuilder(null, 3);
                     blockBuilder.appendNull();
                     writeNativeValue(argumentType, blockBuilder, testValue);
                     blockBuilder.appendNull();
-                    callArguments.add(blockBuilder.build());
+                    if (argumentConvention == BLOCK_POSITION_NOT_NULL) {
+                        callArguments.add(blockBuilder.build());
+                    }
+                    else {
+                        callArguments.add(blockBuilder.buildValueBlock());
+                    }
                     callArguments.add(1);
+                }
+                case BLOCK_POSITION, VALUE_BLOCK_POSITION -> {
+                    BlockBuilder blockBuilder = argumentType.createBlockBuilder(null, 3);
+                    blockBuilder.appendNull();
+                    writeNativeValue(argumentType, blockBuilder, testValue);
+                    blockBuilder.appendNull();
+                    if (argumentConvention == BLOCK_POSITION) {
+                        callArguments.add(blockBuilder.build());
+                    }
+                    else {
+                        callArguments.add(blockBuilder.buildValueBlock());
+                    }
+                    callArguments.add(1);
+                }
+                case FLAT -> {
+                    verify(testValue != null, "null cannot be passed to a flat argument");
+                    BlockBuilder blockBuilder = argumentType.createBlockBuilder(null, 3);
+                    writeNativeValue(argumentType, blockBuilder, testValue);
+                    Block block = blockBuilder.build();
+
+                    byte[] fixedSlice = new byte[argumentType.getFlatFixedSize()];
+                    int variableWidthLength = argumentType.getFlatVariableWidthSize(block, 0);
+                    byte[] variableSlice = new byte[variableWidthLength];
+                    MethodHandle writeFlat = TYPE_OPERATORS.getReadValueOperator(argumentType, simpleConvention(FLAT_RETURN, BLOCK_POSITION));
+                    writeFlat.invokeExact(block, 0, fixedSlice, 0, variableSlice, 0);
+
+                    callArguments.add(fixedSlice);
+                    callArguments.add(0);
+                    callArguments.add(variableSlice);
                 }
                 case IN_OUT -> callArguments.add(new TestingInOut(argumentType, testValue));
                 default -> throw new IllegalArgumentException("Unsupported argument convention: " + argumentConvention);
@@ -307,9 +555,9 @@ public class TestScalarFunctionAdapter
         if (argumentType.equals(ARRAY_TYPE)) {
             BlockBuilder blockBuilder = BIGINT.createBlockBuilder(null, 4);
             blockBuilder.appendNull();
-            blockBuilder.writeLong(99);
+            BIGINT.writeLong(blockBuilder, 99);
             blockBuilder.appendNull();
-            blockBuilder.writeLong(100);
+            BIGINT.writeLong(blockBuilder, 100);
             return blockBuilder.build();
         }
         if (argumentType.equals(CHAR_TYPE)) {
@@ -347,8 +595,6 @@ public class TestScalarFunctionAdapter
     {
         private boolean invoked;
         private boolean objectsMethod;
-        private Boolean booleanValue;
-        private Long longValue;
         private Double doubleValue;
         private Slice sliceValue;
         private Block blockValue;
@@ -356,14 +602,12 @@ public class TestScalarFunctionAdapter
         private Object objectTimestampValue;
 
         @SuppressWarnings("unused")
-        public boolean neverNull(boolean booleanValue, long longValue, double doubleValue, Slice sliceValue, Block blockValue)
+        public boolean neverNull(double doubleValue, Slice sliceValue, Block blockValue)
         {
             checkState(!invoked, "Already invoked");
             invoked = true;
             objectsMethod = false;
 
-            this.booleanValue = booleanValue;
-            this.longValue = longValue;
             this.doubleValue = doubleValue;
             this.sliceValue = sliceValue;
             this.blockValue = blockValue;
@@ -385,14 +629,12 @@ public class TestScalarFunctionAdapter
         }
 
         @SuppressWarnings("unused")
-        public boolean boxedNull(Boolean booleanValue, Long longValue, Double doubleValue, Slice sliceValue, Block blockValue)
+        public boolean boxedNull(Double doubleValue, Slice sliceValue, Block blockValue)
         {
             checkState(!invoked, "Already invoked");
             invoked = true;
             objectsMethod = false;
 
-            this.booleanValue = booleanValue;
-            this.longValue = longValue;
             this.doubleValue = doubleValue;
             this.sliceValue = sliceValue;
             this.blockValue = blockValue;
@@ -415,8 +657,6 @@ public class TestScalarFunctionAdapter
 
         @SuppressWarnings("unused")
         public boolean nullFlag(
-                boolean booleanValue, boolean booleanNull,
-                long longValue, boolean longNull,
                 double doubleValue, boolean doubleNull,
                 Slice sliceValue, boolean sliceNull,
                 Block blockValue, boolean blockNull)
@@ -425,24 +665,8 @@ public class TestScalarFunctionAdapter
             invoked = true;
             objectsMethod = false;
 
-            if (booleanNull) {
-                assertFalse(booleanValue);
-                this.booleanValue = null;
-            }
-            else {
-                this.booleanValue = booleanValue;
-            }
-
-            if (longNull) {
-                assertEquals(longValue, 0);
-                this.longValue = null;
-            }
-            else {
-                this.longValue = longValue;
-            }
-
             if (doubleNull) {
-                assertEquals(doubleValue, 0.0);
+                assertThat(doubleValue).isEqualTo(0.0);
                 this.doubleValue = null;
             }
             else {
@@ -450,7 +674,7 @@ public class TestScalarFunctionAdapter
             }
 
             if (sliceNull) {
-                assertNull(sliceValue);
+                assertThat(sliceValue).isNull();
                 this.sliceValue = null;
             }
             else {
@@ -458,7 +682,7 @@ public class TestScalarFunctionAdapter
             }
 
             if (blockNull) {
-                assertNull(blockValue);
+                assertThat(blockValue).isNull();
                 this.blockValue = null;
             }
             else {
@@ -479,7 +703,7 @@ public class TestScalarFunctionAdapter
             objectsMethod = true;
 
             if (sliceNull) {
-                assertNull(sliceValue);
+                assertThat(sliceValue).isNull();
                 this.sliceValue = null;
             }
             else {
@@ -487,7 +711,7 @@ public class TestScalarFunctionAdapter
             }
 
             if (blockNull) {
-                assertNull(blockValue);
+                assertThat(blockValue).isNull();
                 this.blockValue = null;
             }
             else {
@@ -495,7 +719,7 @@ public class TestScalarFunctionAdapter
             }
 
             if (objectCharNull) {
-                assertNull(objectCharValue);
+                assertThat(objectCharValue).isNull();
                 this.objectCharValue = null;
             }
             else {
@@ -503,11 +727,159 @@ public class TestScalarFunctionAdapter
             }
 
             if (objectTimestampNull) {
-                assertNull(objectTimestampValue);
+                assertThat(objectTimestampValue).isNull();
                 this.objectTimestampValue = null;
             }
             else {
                 this.objectTimestampValue = objectTimestampValue;
+            }
+            return true;
+        }
+
+        @SuppressWarnings("unused")
+        public boolean blockPosition(
+                Block doubleBlock, int doublePosition,
+                Block sliceBlock, int slicePosition,
+                Block blockBlock, int blockPosition)
+        {
+            checkState(!invoked, "Already invoked");
+            invoked = true;
+            objectsMethod = false;
+
+            if (doubleBlock.isNull(doublePosition)) {
+                this.doubleValue = null;
+            }
+            else {
+                this.doubleValue = DOUBLE.getDouble(doubleBlock, doublePosition);
+            }
+
+            if (sliceBlock.isNull(slicePosition)) {
+                this.sliceValue = null;
+            }
+            else {
+                this.sliceValue = VARCHAR.getSlice(sliceBlock, slicePosition);
+            }
+
+            if (blockBlock.isNull(blockPosition)) {
+                this.blockValue = null;
+            }
+            else {
+                this.blockValue = ARRAY_TYPE.getObject(blockBlock, blockPosition);
+            }
+            return true;
+        }
+
+        @SuppressWarnings("unused")
+        public boolean blockPositionObjects(
+                Block sliceBlock, int slicePosition,
+                Block blockBlock, int blockPosition,
+                Block objectCharBlock, int objectCharPosition,
+                Block objectTimestampBlock, int objectTimestampPosition)
+        {
+            checkState(!invoked, "Already invoked");
+            invoked = true;
+            objectsMethod = true;
+
+            if (sliceBlock.isNull(slicePosition)) {
+                this.sliceValue = null;
+            }
+            else {
+                this.sliceValue = VARCHAR.getSlice(sliceBlock, slicePosition);
+            }
+
+            if (blockBlock.isNull(blockPosition)) {
+                this.blockValue = null;
+            }
+            else {
+                this.blockValue = ARRAY_TYPE.getObject(blockBlock, blockPosition);
+            }
+
+            if (objectCharBlock.isNull(objectCharPosition)) {
+                this.objectCharValue = null;
+            }
+            else {
+                this.objectCharValue = CHAR_TYPE.getObject(objectCharBlock, objectCharPosition);
+            }
+
+            if (objectTimestampBlock.isNull(objectTimestampPosition)) {
+                this.objectTimestampValue = null;
+            }
+            else {
+                this.objectTimestampValue = TIMESTAMP_TYPE.getObject(objectTimestampBlock, objectTimestampPosition);
+            }
+            return true;
+        }
+
+        @SuppressWarnings("unused")
+        public boolean valueBlockPosition(
+                LongArrayBlock doubleBlock, int doublePosition,
+                VariableWidthBlock sliceBlock, int slicePosition,
+                ArrayBlock blockBlock, int blockPosition)
+        {
+            checkState(!invoked, "Already invoked");
+            invoked = true;
+            objectsMethod = false;
+
+            if (doubleBlock.isNull(doublePosition)) {
+                this.doubleValue = null;
+            }
+            else {
+                this.doubleValue = DOUBLE.getDouble(doubleBlock, doublePosition);
+            }
+
+            if (sliceBlock.isNull(slicePosition)) {
+                this.sliceValue = null;
+            }
+            else {
+                this.sliceValue = VARCHAR.getSlice(sliceBlock, slicePosition);
+            }
+
+            if (blockBlock.isNull(blockPosition)) {
+                this.blockValue = null;
+            }
+            else {
+                this.blockValue = ARRAY_TYPE.getObject(blockBlock, blockPosition);
+            }
+            return true;
+        }
+
+        @SuppressWarnings("unused")
+        public boolean valueBlockPositionObjects(
+                VariableWidthBlock sliceBlock, int slicePosition,
+                ArrayBlock blockBlock, int blockPosition,
+                VariableWidthBlock objectCharBlock, int objectCharPosition,
+                Fixed12Block objectTimestampBlock, int objectTimestampPosition)
+        {
+            checkState(!invoked, "Already invoked");
+            invoked = true;
+            objectsMethod = true;
+
+            if (sliceBlock.isNull(slicePosition)) {
+                this.sliceValue = null;
+            }
+            else {
+                this.sliceValue = VARCHAR.getSlice(sliceBlock, slicePosition);
+            }
+
+            if (blockBlock.isNull(blockPosition)) {
+                this.blockValue = null;
+            }
+            else {
+                this.blockValue = ARRAY_TYPE.getObject(blockBlock, blockPosition);
+            }
+
+            if (objectCharBlock.isNull(objectCharPosition)) {
+                this.objectCharValue = null;
+            }
+            else {
+                this.objectCharValue = CHAR_TYPE.getObject(objectCharBlock, objectCharPosition);
+            }
+
+            if (objectTimestampBlock.isNull(objectTimestampPosition)) {
+                this.objectTimestampValue = null;
+            }
+            else {
+                this.objectTimestampValue = TIMESTAMP_TYPE.getObject(objectTimestampBlock, objectTimestampPosition);
             }
             return true;
         }
@@ -518,13 +890,13 @@ public class TestScalarFunctionAdapter
                 List<Type> argumentTypes)
         {
             if (shouldFunctionBeInvoked(actualConvention, nullArguments)) {
-                assertTrue(invoked, "function not invoked");
+                assertThat(invoked)
+                        .describedAs("function not invoked")
+                        .isTrue();
                 if (!objectsMethod) {
-                    assertArgumentValue(this.booleanValue, 0, actualConvention, nullArguments, argumentTypes);
-                    assertArgumentValue(this.longValue, 1, actualConvention, nullArguments, argumentTypes);
-                    assertArgumentValue(this.doubleValue, 2, actualConvention, nullArguments, argumentTypes);
-                    assertArgumentValue(this.sliceValue, 3, actualConvention, nullArguments, argumentTypes);
-                    assertArgumentValue(this.blockValue, 4, actualConvention, nullArguments, argumentTypes);
+                    assertArgumentValue(this.doubleValue, 0, actualConvention, nullArguments, argumentTypes);
+                    assertArgumentValue(this.sliceValue, 1, actualConvention, nullArguments, argumentTypes);
+                    assertArgumentValue(this.blockValue, 2, actualConvention, nullArguments, argumentTypes);
                 }
                 else {
                     assertArgumentValue(this.sliceValue, 0, actualConvention, nullArguments, argumentTypes);
@@ -534,20 +906,18 @@ public class TestScalarFunctionAdapter
                 }
             }
             else {
-                assertFalse(invoked, "Function should not be invoked when null is passed to a NEVER_NULL argument");
-                assertNull(this.booleanValue);
-                assertNull(this.longValue);
-                assertNull(this.doubleValue);
-                assertNull(this.sliceValue);
-                assertNull(this.blockValue);
-                assertNull(this.objectCharValue);
-                assertNull(this.objectTimestampValue);
+                assertThat(invoked)
+                        .describedAs("Function should not be invoked when null is passed to a NEVER_NULL argument")
+                        .isFalse();
+                assertThat(this.doubleValue).isNull();
+                assertThat(this.sliceValue).isNull();
+                assertThat(this.blockValue).isNull();
+                assertThat(this.objectCharValue).isNull();
+                assertThat(this.objectTimestampValue).isNull();
             }
 
             this.invoked = false;
             this.objectsMethod = false;
-            this.booleanValue = null;
-            this.longValue = null;
             this.doubleValue = null;
             this.sliceValue = null;
             this.blockValue = null;
@@ -558,7 +928,8 @@ public class TestScalarFunctionAdapter
         private static boolean shouldFunctionBeInvoked(InvocationConvention actualConvention, BitSet nullArguments)
         {
             for (int i = 0; i < actualConvention.getArgumentConventions().size(); i++) {
-                if (actualConvention.getArgumentConvention(i) == NEVER_NULL && nullArguments.get(i)) {
+                InvocationArgumentConvention argumentConvention = actualConvention.getArgumentConvention(i);
+                if ((argumentConvention == NEVER_NULL || argumentConvention == BLOCK_POSITION_NOT_NULL || argumentConvention == VALUE_BLOCK_POSITION_NOT_NULL || argumentConvention == FLAT) && nullArguments.get(i)) {
                     return false;
                 }
             }
@@ -586,8 +957,8 @@ public class TestScalarFunctionAdapter
                 return;
             }
 
-            if (argumentConvention != NEVER_NULL) {
-                assertNull(actualValue);
+            if (argumentConvention != NEVER_NULL && argumentConvention != FLAT) {
+                assertThat(actualValue).isNull();
                 return;
             }
 
@@ -604,14 +975,14 @@ public class TestScalarFunctionAdapter
                 assertBlockEquals(BIGINT, (Block) actual, (Block) expected);
             }
             else {
-                assertEquals(actual, expected);
+                assertThat(actual).isEqualTo(expected);
             }
         }
 
         private static void assertBlockEquals(Type type, Block actual, Block expected)
         {
             for (int position = 0; position < actual.getPositionCount(); position++) {
-                assertEquals(type.getObjectValue(SESSION, actual, position), type.getObjectValue(SESSION, expected, position));
+                assertThat(type.getObjectValue(SESSION, actual, position)).isEqualTo(type.getObjectValue(SESSION, expected, position));
             }
         }
     }

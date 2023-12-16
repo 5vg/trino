@@ -25,16 +25,18 @@ import io.trino.plugin.base.CatalogName;
 import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.hive.metastore.glue.GlueMetastoreStats;
 import io.trino.plugin.iceberg.CommitTaskData;
+import io.trino.plugin.iceberg.IcebergConfig;
 import io.trino.plugin.iceberg.IcebergMetadata;
 import io.trino.plugin.iceberg.TableStatisticsWriter;
 import io.trino.plugin.iceberg.catalog.BaseTrinoCatalogTest;
 import io.trino.plugin.iceberg.catalog.TrinoCatalog;
+import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.security.PrincipalType;
 import io.trino.spi.security.TrinoPrincipal;
 import io.trino.spi.type.TestingTypeManager;
-import org.testng.annotations.Test;
+import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.io.IOException;
@@ -47,9 +49,9 @@ import static io.trino.plugin.hive.HiveTestUtils.HDFS_FILE_SYSTEM_FACTORY;
 import static io.trino.sql.planner.TestingPlannerContext.PLANNER_CONTEXT;
 import static io.trino.testing.TestingConnectorSession.SESSION;
 import static io.trino.testing.TestingNames.randomNameSuffix;
+import static io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER;
 import static java.util.Locale.ENGLISH;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.testng.Assert.assertEquals;
 
 public class TestTrinoGlueCatalog
         extends BaseTrinoCatalogTest
@@ -61,19 +63,25 @@ public class TestTrinoGlueCatalog
     {
         TrinoFileSystemFactory fileSystemFactory = HDFS_FILE_SYSTEM_FACTORY;
         AWSGlueAsync glueClient = AWSGlueAsyncClientBuilder.defaultClient();
+        IcebergGlueCatalogConfig catalogConfig = new IcebergGlueCatalogConfig();
         return new TrinoGlueCatalog(
                 new CatalogName("catalog_name"),
                 fileSystemFactory,
                 new TestingTypeManager(),
+                catalogConfig.isCacheTableMetadata(),
                 new GlueIcebergTableOperationsProvider(
+                        TESTING_TYPE_MANAGER,
+                        catalogConfig,
                         fileSystemFactory,
                         new GlueMetastoreStats(),
                         glueClient),
                 "test",
                 glueClient,
                 new GlueMetastoreStats(),
+                false,
                 Optional.empty(),
-                useUniqueTableLocations);
+                useUniqueTableLocations,
+                new IcebergConfig().isHideMaterializedViewStorageTable());
     }
 
     /**
@@ -105,6 +113,7 @@ public class TestTrinoGlueCatalog
             // Test with IcebergMetadata, should the ConnectorMetadata implementation behavior depend on that class
             ConnectorMetadata icebergMetadata = new IcebergMetadata(
                     PLANNER_CONTEXT.getTypeManager(),
+                    CatalogHandle.fromId("iceberg:NORMAL:v12345"),
                     jsonCodec(CommitTaskData.class),
                     catalog,
                     connectorIdentity -> {
@@ -134,19 +143,25 @@ public class TestTrinoGlueCatalog
 
         TrinoFileSystemFactory fileSystemFactory = HDFS_FILE_SYSTEM_FACTORY;
         AWSGlueAsync glueClient = AWSGlueAsyncClientBuilder.defaultClient();
+        IcebergGlueCatalogConfig catalogConfig = new IcebergGlueCatalogConfig();
         TrinoCatalog catalogWithDefaultLocation = new TrinoGlueCatalog(
                 new CatalogName("catalog_name"),
                 fileSystemFactory,
                 new TestingTypeManager(),
+                catalogConfig.isCacheTableMetadata(),
                 new GlueIcebergTableOperationsProvider(
+                        TESTING_TYPE_MANAGER,
+                        catalogConfig,
                         fileSystemFactory,
                         new GlueMetastoreStats(),
                         glueClient),
                 "test",
                 glueClient,
                 new GlueMetastoreStats(),
+                false,
                 Optional.of(tmpDirectory.toAbsolutePath().toString()),
-                false);
+                false,
+                new IcebergConfig().isHideMaterializedViewStorageTable());
 
         String namespace = "test_default_location_" + randomNameSuffix();
         String table = "tableName";
@@ -155,7 +170,7 @@ public class TestTrinoGlueCatalog
         try {
             File expectedSchemaDirectory = new File(tmpDirectory.toFile(), namespace + ".db");
             File expectedTableDirectory = new File(expectedSchemaDirectory, schemaTableName.getTableName());
-            assertEquals(catalogWithDefaultLocation.defaultTableLocation(SESSION, schemaTableName), expectedTableDirectory.toPath().toAbsolutePath().toString());
+            assertThat(catalogWithDefaultLocation.defaultTableLocation(SESSION, schemaTableName)).isEqualTo(expectedTableDirectory.toPath().toAbsolutePath().toString());
         }
         finally {
             try {
